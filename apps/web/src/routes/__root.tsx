@@ -19,27 +19,31 @@ export const Route = createRootRouteWithContext<RouterContext>()({
           "Team Fortress 2 statistics: weapon usage rates, loadouts, class stats and playerbase trends.",
       },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [
+      { rel: "stylesheet", href: appCss },
+      { rel: "icon", href: "/favicon.ico" },
+    ],
   }),
   shellComponent: RootDocument,
 });
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="bg-slate-950 text-slate-100">
+    <html lang="en" className="dark">
       <head>
         <HeadContent />
       </head>
       <body className="min-h-screen">
-        <header className="border-b border-slate-800 px-6 py-4">
+        <header className="border-b px-6 py-3">
           <nav className="mx-auto flex max-w-4xl items-center gap-6">
-            <Link to="/" className="text-lg font-bold text-amber-400">
-              tracker.tf
+            <Link to="/" className="flex items-center gap-2">
+              <img src="/logo.png" alt="" className="h-8 w-8" />
+              <span className="font-heading text-lg font-bold text-primary">tracker.tf</span>
             </Link>
             <Link
               to="/usage"
-              className="text-sm text-slate-300 hover:text-white"
-              activeProps={{ className: "text-sm text-white font-semibold" }}
+              className="text-sm text-muted-foreground hover:text-foreground"
+              activeProps={{ className: "text-sm font-semibold text-foreground" }}
             >
               Weapon usage
             </Link>

@@ -13,9 +13,12 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # self-signed cert for TLS; generate with scripts/gen-pg-cert.sh
+      - ./certs:/certs:ro
     command: >-
       postgres -c shared_buffers=2GB -c effective_cache_size=8GB
       -c password_encryption=scram-sha-256
+      -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U trackertf"]
       interval: 10s
