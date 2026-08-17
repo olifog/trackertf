@@ -126,3 +126,7 @@ export const queryByFakeIpRulesResponse = z.object({
       .optional(),
   }),
 });
+
+export const resolveVanityResponse = z.object({
+  response: z.object({ success: z.number(), steamid: z.string().optional() }),
+});

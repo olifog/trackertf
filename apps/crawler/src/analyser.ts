@@ -121,13 +121,47 @@ async function recompute(): Promise<void> {
   });
 }
 
+/** avg points/min, kills/hr, dmg/min of players equipping each weapon group
+ * per class (10h+ on the class, weapons slots only, class-aware merge ids) */
+async function recomputeWeaponStats(): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`delete from weapon_class_stats`);
+    await tx.execute(sql`
+      insert into weapon_class_stats
+        (defindex, class_num, players, avg_points_per_min, avg_kills_per_hour,
+         avg_damage_per_min, computed_at)
+      select
+        case when coalesce(s.reskin_group, e.defindex) =
+                  (select coalesce(reskin_group, 264) from item_schema where defindex = 264)
+          then case e.class_num
+            when 1 then 0 when 4 then 1 when 7 then 2 when 2 then 3 when 8 then 4
+            when 6 then 5 when 3 then 6 when 9 then 7 when 5 then 8
+            else coalesce(s.reskin_group, e.defindex) end
+          else coalesce(s.reskin_group, e.defindex) end as gid,
+        e.class_num,
+        count(distinct e.steamid)::int,
+        avg(p.points_scored::real * 60 / p.playtime_seconds),
+        avg(p.kills::real * 3600 / p.playtime_seconds),
+        avg(p.damage_dealt::real * 60 / p.playtime_seconds),
+        now()
+      from equipped_items e
+      join player_class_stats p on p.steamid = e.steamid and p.class_num = e.class_num
+      left join item_schema s on s.defindex = e.defindex
+      where e.slot <= 6 and p.playtime_seconds >= 36000
+      group by 1, 2
+      having count(distinct e.steamid) >= 3
+    `);
+  });
+}
+
 async function main(): Promise<void> {
   console.log("analyser started");
   for (;;) {
     const start = Date.now();
     try {
       await recompute();
-      console.log(`usage_stats recomputed in ${Date.now() - start}ms`);
+      await recomputeWeaponStats();
+      console.log(`usage_stats + weapon_class_stats recomputed in ${Date.now() - start}ms`);
     } catch (err) {
       console.error("analyser run failed:", err);
     }

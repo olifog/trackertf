@@ -15,6 +15,7 @@ import {
   getUserStatsResponse,
   queryByFakeIpPlayersResponse,
   queryByFakeIpRulesResponse,
+  resolveVanityResponse,
 } from "./schemas.ts";
 
 export { TokenBucket } from "./ratelimit.ts";
@@ -39,20 +40,38 @@ export interface SteamClientOptions {
   /** Whole-key budget: 100k/day ≈ 1.15/s. Default stays safely under. */
   ratePerSecond?: number;
   fetchImpl?: typeof fetch;
+  /** observability hook, called after every API round-trip */
+  onResult?: (endpoint: string, outcome: string) => void;
 }
 
 export class SteamClient {
   readonly #key: string;
   readonly #bucket: TokenBucket;
   readonly #fetch: typeof fetch;
+  readonly #onResult: ((endpoint: string, outcome: string) => void) | undefined;
 
   constructor(opts: SteamClientOptions) {
     this.#key = opts.apiKey;
     this.#bucket = new TokenBucket({ ratePerSecond: opts.ratePerSecond ?? 1 });
     this.#fetch = opts.fetchImpl ?? fetch;
+    this.#onResult = opts.onResult;
   }
 
   async #get<S extends z.ZodType>(
+    path: string,
+    params: Record<string, string>,
+    schema: S,
+  ): Promise<SteamResult<z.infer<S>>> {
+    const res = await this.#getInner(path, params, schema);
+    if (this.#onResult) {
+      const endpoint = path.split("/").filter(Boolean).slice(0, 2).join("/");
+      const outcome = res.kind === "error" ? `error_${res.status ?? "network"}` : res.kind;
+      this.#onResult(endpoint, outcome);
+    }
+    return res;
+  }
+
+  async #getInner<S extends z.ZodType>(
     path: string,
     params: Record<string, string>,
     schema: S,
@@ -172,6 +191,17 @@ export class SteamClient {
       getPlayerBansResponse,
     );
     return res.kind === "ok" ? { kind: "ok", data: res.data.players } : res;
+  }
+
+  /** vanity URL name → steamid64 (null if no match) */
+  async resolveVanityUrl(vanity: string): Promise<SteamResult<string | null>> {
+    const res = await this.#get(
+      "/ISteamUser/ResolveVanityURL/v1/",
+      { vanityurl: vanity },
+      resolveVanityResponse,
+    );
+    if (res.kind !== "ok") return res;
+    return { kind: "ok", data: res.data.response.steamid ?? null };
   }
 
   /** Master server list. `filter` uses Valve's \key\value syntax. */

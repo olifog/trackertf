@@ -1,13 +1,14 @@
 import { createDbFromEnv, schema } from "@trackertf/db";
 import { SteamClient, type SteamResult } from "@trackertf/steam";
 import { eq, sql } from "drizzle-orm";
+import { flushMetrics, record } from "./metrics.ts";
 import { parseClassStats, parseEquipped } from "./parse.ts";
 
 const apiKey = process.env["STEAM_API_KEY"];
 if (!apiKey) throw new Error("STEAM_API_KEY is not set");
 
 const db = createDbFromEnv();
-const steam = new SteamClient({ apiKey, ratePerSecond: 1 });
+const steam = new SteamClient({ apiKey, ratePerSecond: 1, onResult: record });
 
 /** Queue expansion mirrors styletf: active, high-hours players spread the BFS. */
 const EXPAND_MIN_MINUTES = 100_000;
@@ -211,11 +212,13 @@ async function worker(id: number): Promise<void> {
     if (!next) {
       await flushEnrichment(true);
       await sweepDeadLetters();
+      await flushMetrics(db).catch((err) => console.error("metrics flush:", err));
       await Bun.sleep(30_000);
       continue;
     }
     try {
       await crawlOne(next);
+      if (Math.random() < 0.05) await flushMetrics(db).catch(() => {});
     } catch (err) {
       if (err instanceof TransientSteamError) {
         pausedUntil = Math.max(pausedUntil, Date.now() + BACKOFF_MS);

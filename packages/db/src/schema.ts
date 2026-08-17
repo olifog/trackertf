@@ -148,6 +148,33 @@ export const itemClassSlots = pgTable(
   (t) => [primaryKey({ columns: [t.defindex, t.classNum, t.slot] })],
 );
 
+/** hourly Steam API call outcome counters, for the /health page */
+export const apiMetrics = pgTable(
+  "api_metrics",
+  {
+    hour: timestamp({ withTimezone: true }).notNull(),
+    endpoint: text().notNull(),
+    outcome: text().notNull(),
+    count: integer().notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.hour, t.endpoint, t.outcome] })],
+);
+
+/** avg performance of players equipping a weapon (merged group id) per class */
+export const weaponClassStats = pgTable(
+  "weapon_class_stats",
+  {
+    defindex: integer().notNull(),
+    classNum: smallint().notNull(),
+    players: integer().notNull(),
+    avgPointsPerMin: real().notNull(),
+    avgKillsPerHour: real().notNull(),
+    avgDamagePerMin: real().notNull(),
+    computedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.defindex, t.classNum] })],
+);
+
 export const crawlFrontier = pgTable(
   "crawl_frontier",
   {

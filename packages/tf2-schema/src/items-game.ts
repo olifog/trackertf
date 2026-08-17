@@ -208,6 +208,24 @@ export function computeClassSlots(itemsGame: KV): ClassSlot[] {
   return out;
 }
 
+/** defindex → paintkit proto id for decorated (warpaint) items */
+export function computePaintkitItems(itemsGame: KV): Map<number, number> {
+  const items = asObj(itemsGame["items"]) ?? {};
+  const prefabs = asObj(itemsGame["prefabs"]) ?? {};
+  const cache = new Map<string, KV>();
+  const out = new Map<number, number>();
+  for (const [key, rawVal] of Object.entries(items)) {
+    const defindex = Number(key);
+    const raw = asObj(rawVal);
+    if (!Number.isInteger(defindex) || !raw) continue;
+    const item = resolve(raw, prefabs, cache);
+    const statics = asObj(item["static_attrs"]);
+    const pk = statics ? asStr(statics["paintkit_proto_def_index"]) : undefined;
+    if (pk !== undefined) out.set(defindex, Number(pk));
+  }
+  return out;
+}
+
 export async function fetchItemsGame(fetchImpl: typeof fetch = fetch): Promise<KV> {
   const res = await fetchImpl(ITEMS_GAME_URL);
   if (!res.ok) throw new Error(`items_game fetch HTTP ${res.status}`);

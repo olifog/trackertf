@@ -1,8 +1,13 @@
 import { type Db, schema } from "@trackertf/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { computeClassSlots, computeReskinGroups, fetchItemsGame } from "./items-game.ts";
-import { fetchLocalization, localizeName } from "./localization.ts";
+import {
+  computeClassSlots,
+  computePaintkitItems,
+  computeReskinGroups,
+  fetchItemsGame,
+} from "./items-game.ts";
+import { fetchLocalization, fetchPaintkitNames, localizeName } from "./localization.ts";
 
 export { computeClassSlots, computeReskinGroups, fetchItemsGame } from "./items-game.ts";
 export { fetchLocalization, localizeName } from "./localization.ts";
@@ -102,7 +107,21 @@ export async function syncItemSchema(db: Db, apiKey: string): Promise<number> {
     where i.defindex = (e -> 0)::int
   `);
 
-  // third pass: per-class slot capabilities (denominators for slot-varying items)
+  // third pass: warpaint items get their paintkit name ("Killer Bee Scattergun")
+  const paintkitNames = await fetchPaintkitNames();
+  const paintkitItems = computePaintkitItems(itemsGame);
+  const renames: [number, string][] = [];
+  for (const [defindex, pkId] of paintkitItems) {
+    const pkName = paintkitNames.get(pkId);
+    if (pkName) renames.push([defindex, pkName]);
+  }
+  await db.execute(sql`
+    update item_schema i set item_name = (e ->> 1) || ' ' || i.item_name
+    from jsonb_array_elements(${JSON.stringify(renames)}::jsonb) e
+    where i.defindex = (e -> 0)::int and i.item_name not like (e ->> 1) || ' %'
+  `);
+
+  // fourth pass: per-class slot capabilities (denominators for slot-varying items)
   const classSlots = computeClassSlots(itemsGame);
   await db.execute(sql`delete from item_class_slots`);
   await db.execute(sql`

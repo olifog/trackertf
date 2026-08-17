@@ -357,7 +357,14 @@ function UsagePage() {
 function ItemName({ item, dim }: { item: UsageRow; dim?: boolean }) {
   return (
     <span className={dim ? "text-[13px] text-muted-foreground" : ""}>
-      {displayName(item)}
+      <Link
+        to="/item/$defindex"
+        params={{ defindex: item.defindex }}
+        className="hover:underline"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {displayName(item)}
+      </Link>
       <span className="ml-1.5 font-mono text-[11px] text-muted-foreground/50">
         #{item.defindex}
       </span>

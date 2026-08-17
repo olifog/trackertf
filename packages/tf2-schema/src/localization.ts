@@ -41,3 +41,26 @@ export function localizeName(
   if (!itemName.startsWith("#")) return itemName;
   return loc.get(itemName.slice(1).toLowerCase()) ?? itemName;
 }
+
+const PROTO_DEFS_URL =
+  "https://raw.githubusercontent.com/SteamDatabase/GameTracking-TF2/master/tf/resource/tf_proto_obj_defs_english.txt";
+
+/** paintkit id → English name ("Killer Bee"), from tf_proto_obj_defs. */
+export async function fetchPaintkitNames(
+  fetchImpl: typeof fetch = fetch,
+): Promise<Map<number, string>> {
+  const res = await fetchImpl(PROTO_DEFS_URL);
+  if (!res.ok) throw new Error(`proto_obj_defs fetch HTTP ${res.status}`);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const decoder =
+    buf[0] === 0xff && buf[1] === 0xfe
+      ? new TextDecoder("utf-16le" as never)
+      : new TextDecoder("utf-8");
+  const text = decoder.decode(buf);
+  const map = new Map<number, string>();
+  // "9_85_field { field_number: 2 }"  "Killer Bee"   (9 = paintkit type)
+  for (const m of text.matchAll(/"9_(\d+)_field \{ field_number: 2 \}"\s+"([^"\n]+)"/g)) {
+    map.set(Number(m[1]), m[2] as string);
+  }
+  return map;
+}
