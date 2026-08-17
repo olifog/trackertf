@@ -66,7 +66,7 @@ async function enqueueFriends(steamids: readonly string[]): Promise<void> {
   await db.execute(sql`
     insert into crawl_frontier (steamid, source)
     select t.steamid, 'friend_bfs'::frontier_source
-    from unnest(${steamids as string[]}::text[]) as t(steamid)
+    from jsonb_array_elements_text(${JSON.stringify(steamids)}::jsonb) as t(steamid)
     where not exists (select 1 from players p where p.steamid = t.steamid)
     on conflict (steamid) do nothing
   `);

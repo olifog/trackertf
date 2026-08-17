@@ -19,6 +19,7 @@
         "@trackertf/steam": "workspace:*",
         "@trackertf/tf2-schema": "workspace:*",
         "drizzle-orm": "^0.45.2",
+        "zod": "^4.1.0",
       },
       "devDependencies": {
         "@types/bun": "^1.3.0",

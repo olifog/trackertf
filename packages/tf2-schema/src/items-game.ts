@@ -1,0 +1,205 @@
+import { type KV, parseVdf } from "./vdf.ts";
+
+const ITEMS_GAME_URL =
+  "https://raw.githubusercontent.com/SteamDatabase/GameTracking-TF2/master/tf/scripts/items/items_game.txt";
+
+/**
+ * Attributes that don't change gameplay — strange counters, paintkits,
+ * australium gold, tradability flags, killstreak visuals, viewmodel tweaks.
+ * Items differing only by these are functionally identical (reskins).
+ */
+const COSMETIC_ATTRS = new Set(
+  [
+    "kill eater",
+    "kill eater score type",
+    "kill eater score type 2",
+    "kill eater score type 3",
+    "kill eater kill type",
+    "kill eater user 1",
+    "kill eater user 2",
+    "kill eater user 3",
+    "kill eater user score type 1",
+    "kill eater user score type 2",
+    "kill eater user score type 3",
+    "strange restriction type 1",
+    "strange restriction value 1",
+    "cannot trade",
+    "always tradable",
+    "never craftable",
+    "tradable after date",
+    "cannot restore",
+    "cannot delete",
+    "cannot giftwrap",
+    "deactive date",
+    "is marketable",
+    "is commodity",
+    "limited quantity item",
+    "is australium item",
+    "loot rarity",
+    "item style override",
+    "paintkit_proto_def_index",
+    "set_item_texture_wear",
+    "has team color paintkit",
+    "min_viewmodel_offset",
+    "inspect_viewmodel_offset",
+    "weapon_allow_inspect",
+    "weapon_uses_stattrak_module",
+    "texture_wear_default",
+    "special taunt",
+    "weapon_stattrak_module_scale",
+    "custom texture lo",
+    "custom texture hi",
+    "killstreak tier",
+    "killstreak effect",
+    "killstreak idleeffect",
+    "hide_strange_prefix",
+    "attach particle effect",
+    "attach particle effect static",
+    "set attached particle",
+    "particle effect vertical offset",
+    "particle effect use head origin",
+    "style changes on strange level",
+    "kill refills meter",
+    "elevate quality",
+    "elevate to unusual if applicable",
+    "turn to gold",
+    "SPELL: set item tint RGB",
+    "SPELL: set Halloween footstep type",
+  ].map((s) => s.toLowerCase()),
+);
+
+/** Weapon-ish slots eligible for functional-group merging. Cosmetics/taunts
+ * share item_class (tf_wearable etc.) and would over-merge catastrophically. */
+const WEAPON_SLOTS = new Set([
+  "primary",
+  "secondary",
+  "melee",
+  "pda",
+  "pda2",
+  "building",
+  "utility",
+]);
+
+interface ResolvedItem {
+  defindex: number;
+  itemClass: string | undefined;
+  slot: string | undefined;
+  classes: string[];
+  gameplayAttrs: string;
+}
+
+function asObj(v: KV | string | undefined): KV | undefined {
+  return v && typeof v === "object" ? v : undefined;
+}
+function asStr(v: KV | string | undefined): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+/** Merge prefab chain (space-separated, recursive) then the item's own keys. */
+function resolve(raw: KV, prefabs: KV, cache: Map<string, KV>): KV {
+  const chain = asStr(raw["prefab"]);
+  if (!chain) return raw;
+  let base: KV = {};
+  for (const name of chain.split(/\s+/)) {
+    let resolved = cache.get(name);
+    if (!resolved) {
+      const p = asObj(prefabs[name]);
+      resolved = p ? resolve(p, prefabs, cache) : {};
+      cache.set(name, resolved);
+    }
+    base = deepMerge(base, resolved);
+  }
+  return deepMerge(base, raw);
+}
+
+function deepMerge(base: KV, over: KV): KV {
+  const out: KV = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    const prev = out[k];
+    out[k] = prev && typeof prev === "object" && typeof v === "object" ? deepMerge(prev, v) : v;
+  }
+  return out;
+}
+
+function gameplayAttrSignature(item: KV): string {
+  const parts: string[] = [];
+  const attrs = asObj(item["attributes"]);
+  if (attrs) {
+    for (const [name, def] of Object.entries(attrs)) {
+      if (COSMETIC_ATTRS.has(name.toLowerCase())) continue;
+      const value = typeof def === "object" ? asStr(def["value"]) : def;
+      parts.push(`${name.toLowerCase()}=${value ?? ""}`);
+    }
+  }
+  const statics = asObj(item["static_attrs"]);
+  if (statics) {
+    for (const [name, v] of Object.entries(statics)) {
+      if (COSMETIC_ATTRS.has(name.toLowerCase())) continue;
+      parts.push(`${name.toLowerCase()}=${typeof v === "string" ? v : JSON.stringify(v)}`);
+    }
+  }
+  return parts.sort().join("|");
+}
+
+export async function fetchItemsGame(fetchImpl: typeof fetch = fetch): Promise<KV> {
+  const res = await fetchImpl(ITEMS_GAME_URL);
+  if (!res.ok) throw new Error(`items_game fetch HTTP ${res.status}`);
+  const root = parseVdf(await res.text());
+  const ig = asObj(root["items_game"]);
+  if (!ig) throw new Error("items_game root missing");
+  return ig;
+}
+
+/**
+ * Functional groups: weapons sharing item_class + slot + usable classes +
+ * gameplay attributes are reskins of each other. Group id = min defindex
+ * (the stock/base item). Returns only defindexes that belong to a group of ≥2.
+ */
+export function computeReskinGroups(itemsGame: KV): Map<number, number> {
+  const items = asObj(itemsGame["items"]) ?? {};
+  const prefabs = asObj(itemsGame["prefabs"]) ?? {};
+  const cache = new Map<string, KV>();
+
+  const resolved: ResolvedItem[] = [];
+  for (const [key, rawVal] of Object.entries(items)) {
+    const defindex = Number(key);
+    const raw = asObj(rawVal);
+    if (!Number.isInteger(defindex) || !raw) continue;
+    const item = resolve(raw, prefabs, cache);
+    const slot = asStr(item["item_slot"])?.toLowerCase();
+    if (!slot || !WEAPON_SLOTS.has(slot)) continue;
+    const itemClass = asStr(item["item_class"])?.toLowerCase();
+    if (!itemClass) continue;
+    const usedBy = asObj(item["used_by_classes"]);
+    const classes = usedBy
+      ? Object.keys(usedBy)
+          .map((c) => c.toLowerCase())
+          .sort()
+      : ["all"];
+    resolved.push({
+      defindex,
+      itemClass,
+      slot,
+      classes,
+      gameplayAttrs: gameplayAttrSignature(item),
+    });
+  }
+
+  const groups = new Map<string, number[]>();
+  for (const item of resolved) {
+    // classes intentionally excluded: per-class stock shotgun defindexes and
+    // the 7-class pan vs 9-class golden pan are functionally the same item
+    const sig = `${item.itemClass}::${item.slot}::${item.gameplayAttrs}`;
+    const list = groups.get(sig);
+    if (list) list.push(item.defindex);
+    else groups.set(sig, [item.defindex]);
+  }
+
+  const out = new Map<number, number>();
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    const groupId = Math.min(...members);
+    for (const d of members) out.set(d, groupId);
+  }
+  return out;
+}

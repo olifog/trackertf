@@ -163,6 +163,7 @@ reskin_group)` — reskin_group hand-curated + prefab-derived, enables "merge re
 - Launch: tracker.tf live with old functionality + reskin merge + visible methodology page.
 
 **Lessons from the 2022 Reddit feedback (r/tf2 + r/truetf2 comment archive):**
+
 - #1 complaint: quality/reskin splitting corrupted headline numbers. Strange/renamed stock
   items are SEPARATE defindexes ("Upgradeable TF_WEAPON_*" — construction PDA showed 90%
   instead of 100%; stock shotgun looked unpopular vs a dozen <1% variants). Functional-group

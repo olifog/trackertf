@@ -1,6 +1,10 @@
 import { type Db, schema } from "@trackertf/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
+import { computeReskinGroups, fetchItemsGame } from "./items-game.ts";
+
+export { computeReskinGroups, fetchItemsGame } from "./items-game.ts";
+export { parseVdf } from "./vdf.ts";
 
 /** Web API class numbering (class number - 1 indexes stock loadouts). */
 export const CLASS_NUMBERS = {
@@ -84,6 +88,15 @@ export async function syncItemSchema(db: Db, apiKey: string): Promise<number> {
     }
     start = page.result.next;
   }
+
+  // second pass: functional reskin groups derived from items_game.txt
+  const groups = computeReskinGroups(await fetchItemsGame());
+  const pairs = JSON.stringify([...groups.entries()]);
+  await db.execute(sql`
+    update item_schema i set reskin_group = (e -> 1)::int
+    from jsonb_array_elements(${pairs}::jsonb) e
+    where i.defindex = (e -> 0)::int
+  `);
 
   return count;
 }

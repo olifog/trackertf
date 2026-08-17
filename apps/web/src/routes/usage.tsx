@@ -41,6 +41,19 @@ export const Route = createFileRoute("/usage")({
 
 type SearchPatch = Partial<ReturnType<typeof Route.useSearch>>;
 
+/** Stock items carry localization tokens ("#TF_Weapon_Medigun") — prettify
+ * until proper tf_english.txt localization lands. */
+function displayName(item: { itemName: string | null; name: string | null; defindex: number }) {
+  if (item.itemName && !item.itemName.startsWith("#")) return item.itemName;
+  const source = item.itemName?.slice(1) ?? item.name ?? String(item.defindex);
+  return source
+    .replace(/^TF_WEAPON_/i, "")
+    .replace(/^TF_/i, "")
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function FilterChip({
   children,
   active,
@@ -120,6 +133,11 @@ function UsagePage() {
           No data yet for this filter combination — the crawler is warming up.
         </p>
       ) : (
+        <p className="text-sm text-muted-foreground">
+          Sample: {items[0]?.sampleSize.toLocaleString()} players
+        </p>
+      )}
+      {items.length > 0 && (
         <ol className="space-y-2">
           {items.map((item, index) => (
             <li
@@ -132,7 +150,7 @@ function UsagePage() {
               ) : (
                 <span className="h-10 w-10" />
               )}
-              <span className="flex-1">{item.itemName ?? item.name ?? item.defindex}</span>
+              <span className="flex-1">{displayName(item)}</span>
               <span className="font-mono font-semibold text-primary">
                 {(item.usage * 100).toFixed(1)}%
               </span>
