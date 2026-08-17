@@ -1,0 +1,15 @@
+# Local dev: just Postgres. `docker compose -f docker-compose.dev.yml up -d`
+services:
+  postgres:
+    image: postgres:17
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: trackertf
+      POSTGRES_USER: trackertf
+      POSTGRES_PASSWORD: trackertf
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+
+volumes:
+  pgdata-dev:

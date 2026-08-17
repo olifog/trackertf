@@ -1,0 +1,233 @@
+{
+  "source": "style.tf ISR cache",
+  "retrieved": "2026-08-16",
+  "fallback": {
+    "@\"/api/usage\",#slot:-1,minutesThreshold:120000,class:-1,active:true,,": [
+      {
+        "defindex": 26,
+        "usage": 1,
+        "name": "TF_WEAPON_PDA_ENGINEER_DESTROY",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/w_pda_engineer.6ecf689c13d4f28d1637f924ae79b6d2b59f533a.png",
+        "usedByClasses": ["Engineer"]
+      },
+      {
+        "defindex": 27,
+        "usage": 1,
+        "name": "TF_WEAPON_PDA_SPY",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/w_cigarette_case.bd42057354b57c5f20c5d3fe8a5194e173b260ea.png",
+        "usedByClasses": ["Spy"]
+      },
+      {
+        "defindex": 28,
+        "usage": 1,
+        "name": "TF_WEAPON_BUILDER",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/w_pda_engineer.6ecf689c13d4f28d1637f924ae79b6d2b59f533a.png",
+        "usedByClasses": ["Engineer"]
+      },
+      {
+        "defindex": 25,
+        "usage": 0.9073253113785096,
+        "name": "TF_WEAPON_PDA_ENGINEER_BUILD",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/w_builder.8c27f38136a143ac4941c877a32912fed6ce03dd.png",
+        "usedByClasses": ["Engineer"]
+      },
+      {
+        "defindex": 305,
+        "usage": 0.7169622123706988,
+        "name": "The Crusader's Crossbow",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_crusaders_crossbow.594f9b5bc758ce75289904d62f052bfd760f21d4.png",
+        "usedByClasses": ["Medic"]
+      },
+      {
+        "defindex": 735,
+        "usage": 0.7038737597635635,
+        "name": "TF_WEAPON_BUILDER_SPY",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/w_sapper.126bbc963e8895117c85c6aa0ed7ae9f94686c37.png",
+        "usedByClasses": ["Spy"]
+      },
+      {
+        "defindex": 37,
+        "usage": 0.6889909225248048,
+        "name": "The Ubersaw",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_ubersaw.18124fa3ac864e30c5bef5b1ffb13c4ab29e70ca.png",
+        "usedByClasses": ["Medic"]
+      },
+      {
+        "defindex": 463,
+        "usage": 0.47365890272793376,
+        "name": "Laugh Taunt",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/all_laugh_taunt.c39eefee7e62b6daccc4f9233e11eaf6f8fc06dc.png",
+        "usedByClasses": [
+          "Scout",
+          "Soldier",
+          "Pyro",
+          "Demoman",
+          "Heavy",
+          "Engineer",
+          "Medic",
+          "Sniper",
+          "Spy"
+        ]
+      },
+      {
+        "defindex": 42,
+        "usage": 0.47018154950390545,
+        "name": "The Sandvich",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_sandwich.03facb91eda7753f68d470f9ecf5ea3b8a013e97.png",
+        "usedByClasses": ["Heavy"]
+      },
+      {
+        "defindex": 214,
+        "usage": 0.4672788684821617,
+        "name": "The Powerjack",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_powerjack.35b48cbb0c32bdfeff66c5c1be39ec6f4251ce29.png",
+        "usedByClasses": ["Pyro"]
+      },
+      {
+        "defindex": 1151,
+        "usage": 0.3867426641334178,
+        "name": "The Iron Bomber",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_quadball.6e7a2b500843bab7a2d6ae67f9909e07d27cd269.png",
+        "usedByClasses": ["Demoman"]
+      },
+      {
+        "defindex": 59,
+        "usage": 0.37682077264091196,
+        "name": "The Dead Ringer",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_pocket_watch.4bb1428288c15c31b18e7ed73676049befb33770.png",
+        "usedByClasses": ["Spy"]
+      },
+      {
+        "defindex": 438,
+        "usage": 0.37680318063471957,
+        "name": "Replay Taunt",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/taunt_replay.e7f1f219a4f134e3a80803120b649f9e38931c17.png",
+        "usedByClasses": [
+          "Scout",
+          "Soldier",
+          "Pyro",
+          "Demoman",
+          "Heavy",
+          "Engineer",
+          "Medic",
+          "Sniper",
+          "Spy"
+        ]
+      },
+      {
+        "defindex": 424,
+        "usage": 0.35734642178594045,
+        "name": "Tomislav",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_tomislav.63b27a0a5c67654fd012428ea06236be9ace35e9.png",
+        "usedByClasses": ["Heavy"]
+      },
+      {
+        "defindex": 200,
+        "usage": 0.35507705298712267,
+        "name": "Upgradeable TF_WEAPON_SCATTERGUN",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_scattergun.2e6a24f7733c70a7d688626c78c9116950a1e684.png",
+        "usedByClasses": ["Scout"]
+      },
+      {
+        "defindex": 775,
+        "usage": 0.34272746464006754,
+        "name": "The Escape Plan",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_pickaxe.eda38e0c44a0a13cfbc8089d699e369dde3b65f6.png",
+        "usedByClasses": ["Soldier"]
+      },
+      {
+        "defindex": 133,
+        "usage": 0.3226725775807473,
+        "name": "The Gunboats",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_rocketboots_soldier.88702c0dabbb26430b7e69e4b39026a49a640307.png",
+        "usedByClasses": ["Soldier"]
+      },
+      {
+        "defindex": 167,
+        "usage": 0.3163159993432318,
+        "name": "High Five Taunt",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/taunt_highfive.972a7efe7534d7854f717077ae69acc31f2f105f.png",
+        "usedByClasses": [
+          "Scout",
+          "Soldier",
+          "Pyro",
+          "Demoman",
+          "Heavy",
+          "Engineer",
+          "Medic",
+          "Sniper",
+          "Spy"
+        ]
+      },
+      {
+        "defindex": 1115,
+        "usage": 0.314914502849905,
+        "name": "Rancho Relaxo Taunt",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/taunt_rancho_relaxo.a6273e59acea8c993b16fe91ef9b0bfed453ab04.png",
+        "usedByClasses": ["Engineer"]
+      },
+      {
+        "defindex": 140,
+        "usage": 0.31364787840405317,
+        "name": "The Wrangler",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_wrangler.fb1e54c81f06acfb4dabe1b909d5ed6a093bc48f.png",
+        "usedByClasses": ["Engineer"]
+      },
+      {
+        "defindex": 142,
+        "usage": 0.3112201815495039,
+        "name": "The Gunslinger",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/gunslinger.f6030adf78acc107d937c74904d7358a84648355.png",
+        "usedByClasses": ["Engineer"]
+      },
+      {
+        "defindex": 329,
+        "usage": 0.30055942579691786,
+        "name": "The Jag",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_jag.383184f964b7793b6d08f542ba665c2a8a3bab50.png",
+        "usedByClasses": ["Engineer"]
+      },
+      {
+        "defindex": 1118,
+        "usage": 0.27595407313583376,
+        "name": "Conga Taunt",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/taunt_conga.96acf336123d65a39bd2145311301435453810c5.png",
+        "usedByClasses": [
+          "Scout",
+          "Soldier",
+          "Pyro",
+          "Demoman",
+          "Heavy",
+          "Engineer",
+          "Medic",
+          "Sniper",
+          "Spy"
+        ]
+      },
+      {
+        "defindex": 215,
+        "usage": 0.26013299556681446,
+        "name": "The Degreaser",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/c_degreaser.0a934206b32be241915edb1919937c4c9dfa2440.png",
+        "usedByClasses": ["Pyro"]
+      },
+      {
+        "defindex": 1110,
+        "usage": 0.2556763539980766,
+        "name": "RPS Taunt",
+        "imageUrl": "http://media.steampowered.com/apps/440/icons/taunt_rps.7e720af90d50ede3347b0718514dfd4f1b6e1b0f.png",
+        "usedByClasses": [
+          "Scout",
+          "Soldier",
+          "Pyro",
+          "Demoman",
+          "Heavy",
+          "Engineer",
+          "Medic",
+          "Sniper",
+          "Spy"
+        ]
+      }
+    ]
+  }
+}

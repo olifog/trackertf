@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "unicorn", "oxc", "import"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "rules": {
+    "no-console": "off",
+    "react/react-in-jsx-scope": "off",
+    "no-await-in-loop": "off",
+    "oxc/no-map-spread": "off"
+  },
+  "ignorePatterns": [
+    "**/routeTree.gen.ts",
+    "**/.output/**",
+    "**/.nitro/**",
+    "**/dist/**",
+    "data/**"
+  ]
+}

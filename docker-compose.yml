@@ -1,0 +1,38 @@
+# Production stack for the VPS (UBUNTU-MAIN).
+# Postgres is exposed on 5432 for Vercel's serverless functions — protected by
+# scram auth + TLS; create a read-only role for the web app (see PLAN.md).
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: trackertf
+      POSTGRES_USER: trackertf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    command: >-
+      postgres -c shared_buffers=2GB -c effective_cache_size=8GB
+      -c password_encryption=scram-sha-256
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trackertf"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  crawler:
+    build:
+      context: .
+      dockerfile: apps/crawler/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://trackertf:${POSTGRES_PASSWORD}@postgres:5432/trackertf
+      STEAM_API_KEY: ${STEAM_API_KEY:?set in .env}
+
+volumes:
+  pgdata:
