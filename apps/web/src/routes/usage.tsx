@@ -70,6 +70,24 @@ const SLOT_DISPLAY: Record<string, string> = {
   action: "Action",
 };
 
+/** stock melee defindexes per class; the pan family folds into these on
+ * class-specific views (matching the analyser's class-aware merge) */
+const STOCK_MELEES = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+const PAN_GROUP = 264;
+
+/** derive what kind of duplicate a variant defindex is from its schema name */
+function variantKind(v: UsageRow): string | null {
+  const n = v.name ?? "";
+  if (/^TF_WEAPON_/i.test(n) || /^Upgradeable TF_WEAPON_/.test(n)) {
+    return n.startsWith("Upgradeable") ? "renamed / strange" : "stock";
+  }
+  if (/botkiller/i.test(n)) return "botkiller";
+  if (/^Festive/i.test(n)) return "festive";
+  if (/australium/i.test(n)) return "australium";
+  if (/^[a-z0-9_]+$/.test(n)) return "warpaint";
+  return null;
+}
+
 /** PDA/builder pseudo-items every player of a class "equips" (~100% rows). */
 const PDA_NAMES = new Set([
   "TF_WEAPON_PDA_ENGINEER_BUILD",
@@ -291,11 +309,18 @@ function UsagePage() {
           </TableHeader>
           <TableBody>
             {items.map((item, index) => {
-              const variants =
+              let variants =
                 search.merge && item.reskinGroup !== null
                   ? (variantsByGroup.get(item.reskinGroup) ?? [])
                   : [];
-              const expandable = variants.length > 0;
+              // class views fold the pan family into the class's stock melee
+              if (search.merge && search.class !== -1 && STOCK_MELEES.has(item.defindex)) {
+                variants = [...variants, ...(variantsByGroup.get(PAN_GROUP) ?? [])];
+              }
+              // a lone variant that IS the parent row adds nothing
+              const expandable =
+                variants.length > 1 ||
+                (variants.length === 1 && variants[0]?.defindex !== item.defindex);
               const isOpen = expandable && expanded.has(item.defindex);
               return (
                 <ItemRows
@@ -386,7 +411,8 @@ function ItemRows({
           <ItemName item={item} />
           {expandable && (
             <span className="ml-1.5 font-mono text-[11px] text-primary/70">
-              {isOpen ? "▾" : "▸"} {variants.length} variants
+              {isOpen ? "▾" : "▸"} {variants.length}{" "}
+              {variants.length === 1 ? "variant" : "variants"}
             </span>
           )}
         </TableCell>
@@ -418,6 +444,11 @@ function ItemRows({
             </TableCell>
             <TableCell className="py-0.5 pl-6" colSpan={1 + extraCols}>
               <ItemName item={v} dim />
+              {variantKind(v) && (
+                <span className="ml-2 rounded bg-secondary/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  {variantKind(v)}
+                </span>
+              )}
             </TableCell>
             <TableCell className="py-0.5 text-right font-mono text-xs text-muted-foreground/70 tabular-nums">
               {v.count.toLocaleString()}

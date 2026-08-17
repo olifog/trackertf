@@ -29,28 +29,47 @@ async function recompute(): Promise<void> {
             and coalesce(p.tf2_minutes, 0) > ${pop.minutes}
         ),
         total as (select count(*)::int n from pop),
+        pan_group as (
+          -- the all-class stock-stat melee family (Frying Pan et al.)
+          select coalesce(reskin_group, 264) gid from item_schema where defindex = 264
+        ),
         eq as (
           select e.steamid, e.class_num, e.slot, e.defindex as raw_defindex,
-                 coalesce(s.reskin_group, e.defindex) as merged_defindex
+                 coalesce(s.reskin_group, e.defindex) as gid,
+                 -- class-specific merge id: pan-family folds into the class's
+                 -- stock melee (for a scout, a Pan IS a Bat). Any-class rollups
+                 -- keep the family separate to avoid cross-class collapse.
+                 case when coalesce(s.reskin_group, e.defindex) = (select gid from pan_group)
+                   then case e.class_num
+                     when 1 then 0 when 4 then 1 when 7 then 2 when 2 then 3 when 8 then 4
+                     when 6 then 5 when 3 then 6 when 9 then 7 when 5 then 8
+                     else coalesce(s.reskin_group, e.defindex) end
+                   else coalesce(s.reskin_group, e.defindex) end as cgid
           from equipped_items e
           join pop using (steamid)
           left join item_schema s on s.defindex = e.defindex
         ),
-        counts as (
-          select false as merged, class_num, slot, raw_defindex as defindex, count(*)::int c
-          from eq group by class_num, slot, raw_defindex
-          union all
-          select true, class_num, slot, merged_defindex, count(*)::int
-          from eq group by class_num, slot, merged_defindex
+        counts_raw as (
+          select class_num, slot, raw_defindex d, count(*)::int c from eq group by 1, 2, 3
         ),
+        counts_global as (select class_num, slot, gid d, count(*)::int c from eq group by 1, 2, 3),
+        counts_class as (select class_num, slot, cgid d, count(*)::int c from eq group by 1, 2, 3),
         rollups as (
-          select merged, class_num, slot, defindex, c from counts
+          select false merged, class_num, slot, d as defindex, c from counts_raw
           union all
-          select merged, -1, slot, defindex, sum(c)::int from counts group by merged, slot, defindex
+          select false, -1, slot, d, sum(c)::int from counts_raw group by slot, d
           union all
-          select merged, class_num, -1, defindex, sum(c)::int from counts group by merged, class_num, defindex
+          select false, class_num, -1, d, sum(c)::int from counts_raw group by class_num, d
           union all
-          select merged, -1, -1, defindex, sum(c)::int from counts group by merged, defindex
+          select false, -1, -1, d, sum(c)::int from counts_raw group by d
+          union all
+          select true, class_num, slot, d, c from counts_class
+          union all
+          select true, class_num, -1, d, sum(c)::int from counts_class group by class_num, d
+          union all
+          select true, -1, slot, d, sum(c)::int from counts_global group by slot, d
+          union all
+          select true, -1, -1, d, sum(c)::int from counts_global group by d
         ),
         -- class=Any denominators: per-item class count, and for merged groups
         -- the UNION of classes across members (engineer+spy builders etc.)

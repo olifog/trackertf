@@ -1,7 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
 import { createDbFromEnv, type Db, schema } from "@trackertf/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 
 /** Every usage-page filter lives in the URL — this schema is the contract. */
@@ -47,7 +47,7 @@ export interface UsageResponse {
   variants: UsageRow[];
 }
 
-function selectUsage(db: Db, filters: UsageFilters, merged: boolean) {
+function selectUsage(db: Db, filters: UsageFilters, merged: boolean, onlyGrouped = false) {
   return db
     .select({
       defindex: schema.usageStats.defindex,
@@ -71,6 +71,7 @@ function selectUsage(db: Db, filters: UsageFilters, merged: boolean) {
         eq(schema.usageStats.activeOnly, filters.active),
         eq(schema.usageStats.minutesThreshold, filters.minutes),
         eq(schema.usageStats.mergeReskins, merged),
+        onlyGrouped ? isNotNull(schema.itemSchema.reskinGroup) : undefined,
       ),
     )
     .orderBy(desc(schema.usageStats.usage));
@@ -85,10 +86,10 @@ export const fetchUsage = createServerFn({ method: "GET" })
     });
     const rows = (await selectUsage(getDb(), data, data.merge).limit(150)).map(toIso);
     // merge view: also ship per-variant rows so groups can expand in place
+    // (grouped-only filter lives in SQL — a JS post-limit filter dropped
+    // low-usage variants on large result sets)
     const variants = data.merge
-      ? (await selectUsage(getDb(), data, false).limit(600))
-          .filter((r) => r.reskinGroup !== null)
-          .map(toIso)
+      ? (await selectUsage(getDb(), data, false, true).limit(2000)).map(toIso)
       : [];
     return { rows, variants };
   });

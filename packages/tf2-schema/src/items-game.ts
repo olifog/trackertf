@@ -66,6 +66,8 @@ const COSMETIC_ATTRS = new Set(
     "SPELL: set item tint RGB",
     "SPELL: set Halloween footstep type",
     "disable fancy class select anim",
+    "sapper voice pak",
+    "sapper voice pak idle wait",
     "override projectile type",
     "vision opt in flags",
     "pyrovision only DISPLAY ONLY",
@@ -183,8 +185,11 @@ export function computeReskinGroups(itemsGame: KV): Map<number, number> {
     const item = resolve(raw, prefabs, cache);
     const slot = asStr(item["item_slot"])?.toLowerCase();
     if (!slot || !WEAPON_SLOTS.has(slot)) continue;
-    const itemClass = asStr(item["item_class"])?.toLowerCase();
+    let itemClass = asStr(item["item_class"])?.toLowerCase();
     if (!itemClass) continue;
+    // Valve inconsistency: stock sapper is tf_weapon_builder, newer sappers
+    // (Ap-Sap, Festive) are tf_weapon_sapper — same weapon
+    if (slot === "building" && itemClass === "tf_weapon_builder") itemClass = "tf_weapon_sapper";
     const usedBy = asObj(item["used_by_classes"]);
     const classes = usedBy
       ? Object.keys(usedBy)
@@ -202,9 +207,14 @@ export function computeReskinGroups(itemsGame: KV): Map<number, number> {
 
   const groups = new Map<string, number[]>();
   for (const item of resolved) {
-    // classes intentionally excluded: per-class stock shotgun defindexes and
-    // the 7-class pan vs 9-class golden pan are functionally the same item
-    const sig = `${item.itemClass}::${item.slot}::${item.gameplayAttrs}`;
+    // classes intentionally excluded (per-class stock shotguns and 7-class pan
+    // vs 9-class golden pan are the same item) — EXCEPT building-slot items,
+    // where engineer's toolbox and spy's sapper share item_class and would
+    // otherwise merge cross-class into a nonsense "PDA" row
+    const sig =
+      item.slot === "building"
+        ? `${item.itemClass}::${item.slot}::${item.classes.join(",")}::${item.gameplayAttrs}`
+        : `${item.itemClass}::${item.slot}::${item.gameplayAttrs}`;
     const list = groups.get(sig);
     if (list) list.push(item.defindex);
     else groups.set(sig, [item.defindex]);
