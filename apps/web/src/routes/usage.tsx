@@ -78,7 +78,7 @@ const PAN_GROUP = 264;
 /** derive what kind of duplicate a variant defindex is from its schema name */
 function variantKind(v: UsageRow): string | null {
   const n = v.name ?? "";
-  if (/^TF_WEAPON_/i.test(n) || /^Upgradeable TF_WEAPON_/.test(n)) {
+  if (/^TF_WEAPON_/i.test(n) || n.startsWith("Upgradeable TF_WEAPON_")) {
     return n.startsWith("Upgradeable") ? "renamed / strange" : "stock";
   }
   if (/botkiller/i.test(n)) return "botkiller";
