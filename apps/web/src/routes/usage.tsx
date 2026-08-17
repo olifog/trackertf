@@ -39,7 +39,7 @@ const SLOTS = [
   { num: 2, label: "Melee" },
   { num: 3, label: "Disguise Kit" },
   { num: 4, label: "Sapper" },
-  { num: 5, label: "Constr. PDA" },
+  { num: 5, label: "PDA" },
   { num: 6, label: "Watch" },
   { num: 7, label: "Cosmetic" },
   { num: 8, label: "Taunt" },
@@ -190,6 +190,7 @@ function UsagePage() {
   const search = Route.useSearch();
   const { data } = useSuspenseQuery(usageQueryOptions(search));
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
+  const [showAll, setShowAll] = useState(false);
 
   const variantsByGroup = useMemo(() => {
     const map = new Map<number, UsageRow[]>();
@@ -202,7 +203,8 @@ function UsagePage() {
     return map;
   }, [data.variants]);
 
-  const items = data.rows.filter((r) => search.pdas || !PDA_NAMES.has(r.name ?? ""));
+  const allItems = data.rows.filter((r) => search.pdas || !PDA_NAMES.has(r.name ?? ""));
+  const items = showAll ? allItems : allItems.slice(0, 100);
   const sample = data.rows[0]?.sampleSize;
   const computedAt = data.rows[0]?.computedAt;
 
@@ -339,6 +341,15 @@ function UsagePage() {
           </TableBody>
         </Table>
       )}
+      {!showAll && allItems.length > items.length && (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="w-full rounded-md border py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          Show all {allItems.length.toLocaleString()} items
+        </button>
+      )}
     </div>
   );
 }
@@ -454,11 +465,7 @@ function ItemRows({
               {v.count.toLocaleString()}
             </TableCell>
             <TableCell className="py-0.5">
-              <div className="flex items-center justify-end">
-                <span className="w-14 text-right font-mono text-xs text-muted-foreground tabular-nums">
-                  {(v.usage * 100).toFixed(1)}%
-                </span>
-              </div>
+              <UsageBar usage={v.usage} dim />
             </TableCell>
           </TableRow>
         ))}
@@ -466,16 +473,18 @@ function ItemRows({
   );
 }
 
-function UsageBar({ usage }: { usage: number }) {
+function UsageBar({ usage, dim }: { usage: number; dim?: boolean }) {
   return (
     <div className="flex items-center justify-end gap-2">
-      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-secondary">
+      <div className={`h-1.5 overflow-hidden rounded-full bg-secondary ${dim ? "w-20" : "w-24"}`}>
         <div
-          className="h-full rounded-full bg-primary"
+          className={`h-full rounded-full ${dim ? "bg-chart-2/60" : "bg-primary"}`}
           style={{ width: `${Math.min(usage * 100, 100)}%` }}
         />
       </div>
-      <span className="w-14 text-right font-mono text-sm tabular-nums">
+      <span
+        className={`w-14 text-right font-mono tabular-nums ${dim ? "text-xs text-muted-foreground" : "text-sm"}`}
+      >
         {(usage * 100).toFixed(1)}%
       </span>
     </div>

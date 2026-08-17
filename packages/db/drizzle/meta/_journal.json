@@ -15,6 +15,13 @@
       "when": 1786950484542,
       "tag": "0001_round_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786952415061,
+      "tag": "0002_past_proemial_gods",
+      "breakpoints": true
     }
   ]
 }

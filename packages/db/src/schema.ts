@@ -133,6 +133,21 @@ export const itemSchema = pgTable("item_schema", {
   reskinGroup: integer(),
 });
 
+/**
+ * Which classes can equip an item in which slot (0=primary/1=secondary/2=melee,
+ * from items_game used_by_classes slot overrides). Powers correct class=Any
+ * per-slot denominators for slot-varying items (shotgun, Panic Attack).
+ */
+export const itemClassSlots = pgTable(
+  "item_class_slots",
+  {
+    defindex: integer().notNull(),
+    classNum: smallint().notNull(),
+    slot: smallint().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.defindex, t.classNum, t.slot] })],
+);
+
 export const crawlFrontier = pgTable(
   "crawl_frontier",
   {

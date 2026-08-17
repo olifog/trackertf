@@ -1,10 +1,10 @@
 import { type Db, schema } from "@trackertf/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { computeReskinGroups, fetchItemsGame } from "./items-game.ts";
+import { computeClassSlots, computeReskinGroups, fetchItemsGame } from "./items-game.ts";
 import { fetchLocalization, localizeName } from "./localization.ts";
 
-export { computeReskinGroups, fetchItemsGame } from "./items-game.ts";
+export { computeClassSlots, computeReskinGroups, fetchItemsGame } from "./items-game.ts";
 export { fetchLocalization, localizeName } from "./localization.ts";
 export { parseVdf } from "./vdf.ts";
 
@@ -93,12 +93,23 @@ export async function syncItemSchema(db: Db, apiKey: string): Promise<number> {
   }
 
   // second pass: functional reskin groups derived from items_game.txt
-  const groups = computeReskinGroups(await fetchItemsGame());
+  const itemsGame = await fetchItemsGame();
+  const groups = computeReskinGroups(itemsGame);
   const pairs = JSON.stringify([...groups.entries()]);
   await db.execute(sql`
     update item_schema i set reskin_group = (e -> 1)::int
     from jsonb_array_elements(${pairs}::jsonb) e
     where i.defindex = (e -> 0)::int
+  `);
+
+  // third pass: per-class slot capabilities (denominators for slot-varying items)
+  const classSlots = computeClassSlots(itemsGame);
+  await db.execute(sql`delete from item_class_slots`);
+  await db.execute(sql`
+    insert into item_class_slots (defindex, class_num, slot)
+    select (e -> 0)::int, (e -> 1)::smallint, (e -> 2)::smallint
+    from jsonb_array_elements(${JSON.stringify(classSlots.map((c) => [c.defindex, c.classNum, c.slot]))}::jsonb) e
+    on conflict do nothing
   `);
 
   return count;

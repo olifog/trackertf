@@ -85,7 +85,7 @@ function selectUsage(database: Db, filters: UsageFilters, merged: boolean, onlyG
 export const fetchUsage = createServerFn({ method: "GET" })
   .validator(usageFiltersSchema)
   .handler(async ({ data }): Promise<UsageResponse> => {
-    const rows = (await selectUsage(getDb(), data, data.merge).limit(150)).map(toIso);
+    const rows = (await selectUsage(getDb(), data, data.merge).limit(2000)).map(toIso);
     // merge view: also ship per-variant rows so groups can expand in place
     // (grouped-only filter lives in SQL — a JS post-limit filter dropped
     // low-usage variants on large result sets)

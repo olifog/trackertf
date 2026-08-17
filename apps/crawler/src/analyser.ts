@@ -82,20 +82,39 @@ async function recompute(): Promise<void> {
           select coalesce(s.reskin_group, s.defindex) gid, greatest(count(distinct c.c), 1)::int n
           from item_schema s cross join lateral unnest(s.used_by_classes) c(c)
           group by 1
+        ),
+        -- slot-specific denominators: Panic Attack in the primary slot is an
+        -- engineer-only opportunity even though 4 classes own the item
+        own_slot as (
+          select defindex, slot, count(*)::int n from item_class_slots group by 1, 2
+        ),
+        group_slot as (
+          select coalesce(s.reskin_group, ics.defindex) gid, ics.slot,
+                 count(distinct ics.class_num)::int n
+          from item_class_slots ics
+          join item_schema s on s.defindex = ics.defindex
+          group by 1, 2
         )
         insert into usage_stats
           (defindex, class_num, slot, active_only, minutes_threshold, merge_reskins,
            usage, count, sample_size, computed_at)
         select
           r.defindex, r.class_num, r.slot, ${pop.active}, ${pop.minutes}, r.merged,
-          -- class=Any divides by per-class equip opportunities (old styletf semantics)
-          r.c::real / (t.n * case when r.class_num = -1
-            then coalesce(case when r.merged then g.n else o.n end, 9) else 1 end),
+          -- class=Any divides by per-class equip opportunities (old styletf
+          -- semantics); slot-specific rows use slot-specific class counts
+          r.c::real / (t.n * case
+            when r.class_num <> -1 then 1
+            when r.slot = -1 then coalesce(case when r.merged then g.n else o.n end, 9)
+            else coalesce(
+              case when r.merged then gs.n else os.n end,
+              case when r.merged then g.n else o.n end, 9) end),
           r.c, t.n, now()
         from rollups r
         cross join total t
         left join own_classes o on o.defindex = r.defindex
         left join group_classes g on g.gid = r.defindex
+        left join own_slot os on os.defindex = r.defindex and os.slot = r.slot
+        left join group_slot gs on gs.gid = r.defindex and gs.slot = r.slot
         where t.n > 0
       `);
     }

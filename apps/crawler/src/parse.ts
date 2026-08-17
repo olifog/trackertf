@@ -22,6 +22,16 @@ const STOCK_ITEMS: readonly (readonly number[])[] = [
 export const SLOT_COSMETIC = 7;
 export const SLOT_TAUNT = 8;
 
+/**
+ * Physical equip slots 4/6 mean different things per class (spy: sapper/watch,
+ * engineer: destruction PDA/toolbox). Remap engineer's to the semantic PDA
+ * slot (5) so slot filters mean one thing: 4=sapper, 5=PDAs, 6=watch.
+ */
+function semanticSlot(classNum: number, slot: number): number {
+  if (classNum === 9 && (slot === 4 || slot === 6)) return 5;
+  return slot;
+}
+
 export interface EquippedRow {
   defindex: number;
   classNum: number;
@@ -35,12 +45,20 @@ export interface EquippedRow {
  */
 export function parseEquipped(items: readonly BackpackItem[]): EquippedRow[] {
   const out: EquippedRow[] = [];
+  // stock backfill decisions use PHYSICAL slot occupancy; stored rows use
+  // semantic slots (engineer's two PDA physical slots both map to 5)
+  const physicalOccupied = new Set<string>();
 
   for (const item of items) {
     for (const equip of item.equipped ?? []) {
       if (equip.slot === 9 || equip.class < 1 || equip.class > 9) continue;
       const slot = equip.slot < 7 ? equip.slot : equip.slot < 11 ? SLOT_COSMETIC : SLOT_TAUNT;
-      out.push({ defindex: item.defindex, classNum: equip.class, slot });
+      if (slot < 7) physicalOccupied.add(`${equip.class}:${slot}`);
+      out.push({
+        defindex: item.defindex,
+        classNum: equip.class,
+        slot: semanticSlot(equip.class, slot),
+      });
     }
   }
 
@@ -50,8 +68,9 @@ export function parseEquipped(items: readonly BackpackItem[]): EquippedRow[] {
     for (let slot = 0; slot < stock.length; slot++) {
       const defindex = stock[slot];
       if (defindex === undefined || defindex === -1) continue;
-      const occupied = out.some((e) => e.classNum === classNum && e.slot === slot);
-      if (!occupied) out.push({ defindex, classNum, slot });
+      if (!physicalOccupied.has(`${classNum}:${slot}`)) {
+        out.push({ defindex, classNum, slot: semanticSlot(classNum, slot) });
+      }
     }
   }
 

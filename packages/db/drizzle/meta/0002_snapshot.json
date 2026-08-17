@@ -1,0 +1,843 @@
+{
+  "id": "056bf8aa-d5f0-4954-8413-198aa71d4bee",
+  "prevId": "d7007d1c-4a24-4936-8a57-dcc9909e485c",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.crawl_frontier": {
+      "name": "crawl_frontier",
+      "schema": "",
+      "columns": {
+        "steamid": {
+          "name": "steamid",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "frontier_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "priority": {
+          "name": "priority",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "enqueued_at": {
+          "name": "enqueued_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "locked_until": {
+          "name": "locked_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "crawl_frontier_dequeue_idx": {
+          "name": "crawl_frontier_dequeue_idx",
+          "columns": [
+            {
+              "expression": "priority",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "enqueued_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.equipped_items": {
+      "name": "equipped_items",
+      "schema": "",
+      "columns": {
+        "steamid": {
+          "name": "steamid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "defindex": {
+          "name": "defindex",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "class_num": {
+          "name": "class_num",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slot": {
+          "name": "slot",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "equipped_items_defindex_idx": {
+          "name": "equipped_items_defindex_idx",
+          "columns": [
+            {
+              "expression": "defindex",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "equipped_items_steamid_players_steamid_fk": {
+          "name": "equipped_items_steamid_players_steamid_fk",
+          "tableFrom": "equipped_items",
+          "tableTo": "players",
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "equipped_items_steamid_class_num_slot_defindex_pk": {
+          "name": "equipped_items_steamid_class_num_slot_defindex_pk",
+          "columns": ["steamid", "class_num", "slot", "defindex"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.item_class_slots": {
+      "name": "item_class_slots",
+      "schema": "",
+      "columns": {
+        "defindex": {
+          "name": "defindex",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "class_num": {
+          "name": "class_num",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slot": {
+          "name": "slot",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "item_class_slots_defindex_class_num_slot_pk": {
+          "name": "item_class_slots_defindex_class_num_slot_pk",
+          "columns": ["defindex", "class_num", "slot"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.item_schema": {
+      "name": "item_schema",
+      "schema": "",
+      "columns": {
+        "defindex": {
+          "name": "defindex",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "item_name": {
+          "name": "item_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "image_url": {
+          "name": "image_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "slot": {
+          "name": "slot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "used_by_classes": {
+          "name": "used_by_classes",
+          "type": "smallint[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "equip_regions": {
+          "name": "equip_regions",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reskin_group": {
+          "name": "reskin_group",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.player_class_stats": {
+      "name": "player_class_stats",
+      "schema": "",
+      "columns": {
+        "steamid": {
+          "name": "steamid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "class_num": {
+          "name": "class_num",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "playtime_seconds": {
+          "name": "playtime_seconds",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "kills": {
+          "name": "kills",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "kill_assists": {
+          "name": "kill_assists",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "damage_dealt": {
+          "name": "damage_dealt",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "points_scored": {
+          "name": "points_scored",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "dominations": {
+          "name": "dominations",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "captures": {
+          "name": "captures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "defenses": {
+          "name": "defenses",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "player_class_stats_steamid_players_steamid_fk": {
+          "name": "player_class_stats_steamid_players_steamid_fk",
+          "tableFrom": "player_class_stats",
+          "tableTo": "players",
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "player_class_stats_steamid_class_num_pk": {
+          "name": "player_class_stats_steamid_class_num_pk",
+          "columns": ["steamid", "class_num"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.player_friends_raw": {
+      "name": "player_friends_raw",
+      "schema": "",
+      "columns": {
+        "steamid": {
+          "name": "steamid",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "player_friends_raw_steamid_players_steamid_fk": {
+          "name": "player_friends_raw_steamid_players_steamid_fk",
+          "tableFrom": "player_friends_raw",
+          "tableTo": "players",
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.player_items_raw": {
+      "name": "player_items_raw",
+      "schema": "",
+      "columns": {
+        "steamid": {
+          "name": "steamid",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "player_items_raw_steamid_players_steamid_fk": {
+          "name": "player_items_raw_steamid_players_steamid_fk",
+          "tableFrom": "player_items_raw",
+          "tableTo": "players",
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.player_stats_raw": {
+      "name": "player_stats_raw",
+      "schema": "",
+      "columns": {
+        "steamid": {
+          "name": "steamid",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "player_stats_raw_steamid_players_steamid_fk": {
+          "name": "player_stats_raw_steamid_players_steamid_fk",
+          "tableFrom": "player_stats_raw",
+          "tableTo": "players",
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.players": {
+      "name": "players",
+      "schema": "",
+      "columns": {
+        "steamid": {
+          "name": "steamid",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "first_seen": {
+          "name": "first_seen",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "source": {
+          "name": "source",
+          "type": "frontier_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_crawled": {
+          "name": "last_crawled",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "personaname": {
+          "name": "personaname",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "avatar_hash": {
+          "name": "avatar_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "visibility": {
+          "name": "visibility",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tf2_minutes": {
+          "name": "tf2_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tf2_minutes_2wk": {
+          "name": "tf2_minutes_2wk",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vac_banned": {
+          "name": "vac_banned",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "game_bans": {
+          "name": "game_bans",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "items_status": {
+          "name": "items_status",
+          "type": "fetch_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stats_status": {
+          "name": "stats_status",
+          "type": "fetch_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "friends_status": {
+          "name": "friends_status",
+          "type": "fetch_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "players_last_crawled_idx": {
+          "name": "players_last_crawled_idx",
+          "columns": [
+            {
+              "expression": "last_crawled",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.server_snapshots": {
+      "name": "server_snapshots",
+      "schema": "",
+      "columns": {
+        "scanned_at": {
+          "name": "scanned_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "map": {
+          "name": "map",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "region": {
+          "name": "region",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "official": {
+          "name": "official",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "server_count": {
+          "name": "server_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "players": {
+          "name": "players",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bots": {
+          "name": "bots",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "server_snapshots_scanned_at_idx": {
+          "name": "server_snapshots_scanned_at_idx",
+          "columns": [
+            {
+              "expression": "scanned_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "server_snapshots_scanned_at_map_region_official_pk": {
+          "name": "server_snapshots_scanned_at_map_region_official_pk",
+          "columns": ["scanned_at", "map", "region", "official"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.usage_stats": {
+      "name": "usage_stats",
+      "schema": "",
+      "columns": {
+        "defindex": {
+          "name": "defindex",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "class_num": {
+          "name": "class_num",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slot": {
+          "name": "slot",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "active_only": {
+          "name": "active_only",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "minutes_threshold": {
+          "name": "minutes_threshold",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "merge_reskins": {
+          "name": "merge_reskins",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "usage": {
+          "name": "usage",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "count": {
+          "name": "count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "sample_size": {
+          "name": "sample_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "computed_at": {
+          "name": "computed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "usage_stats_key_idx": {
+          "name": "usage_stats_key_idx",
+          "columns": [
+            {
+              "expression": "defindex",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "class_num",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "slot",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "active_only",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "minutes_threshold",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "merge_reskins",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "usage_stats_filter_idx": {
+          "name": "usage_stats_filter_idx",
+          "columns": [
+            {
+              "expression": "class_num",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "slot",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "active_only",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "minutes_threshold",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "merge_reskins",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.fetch_status": {
+      "name": "fetch_status",
+      "schema": "public",
+      "values": ["ok", "private", "not_found", "empty", "error"]
+    },
+    "public.frontier_source": {
+      "name": "frontier_source",
+      "schema": "public",
+      "values": ["seed", "friend_bfs", "review_sample", "random_sample", "recrawl"]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

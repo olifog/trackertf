@@ -158,6 +158,56 @@ function gameplayAttrSignature(item: KV): string {
   return parts.toSorted().join("|");
 }
 
+const SLOT_NUMS: Record<string, number> = { primary: 0, secondary: 1, melee: 2 };
+const CLASS_NUMS: Record<string, number> = {
+  scout: 1,
+  sniper: 2,
+  soldier: 3,
+  demoman: 4,
+  medic: 5,
+  heavy: 6,
+  pyro: 7,
+  spy: 8,
+  engineer: 9,
+};
+
+export interface ClassSlot {
+  defindex: number;
+  classNum: number;
+  slot: number;
+}
+
+/**
+ * (defindex, class, slot) capabilities for weapon slots, honoring per-class
+ * slot overrides in used_by_classes ("engineer": "primary" on the shotgun).
+ */
+export function computeClassSlots(itemsGame: KV): ClassSlot[] {
+  const items = asObj(itemsGame["items"]) ?? {};
+  const prefabs = asObj(itemsGame["prefabs"]) ?? {};
+  const cache = new Map<string, KV>();
+  const out: ClassSlot[] = [];
+  for (const [key, rawVal] of Object.entries(items)) {
+    const defindex = Number(key);
+    const raw = asObj(rawVal);
+    if (!Number.isInteger(defindex) || !raw) continue;
+    const item = resolve(raw, prefabs, cache);
+    const defaultSlot = asStr(item["item_slot"])?.toLowerCase();
+    const usedBy = asObj(item["used_by_classes"]);
+    if (!usedBy) continue;
+    for (const [className, slotOverride] of Object.entries(usedBy)) {
+      const classNum = CLASS_NUMS[className.toLowerCase()];
+      if (classNum === undefined) continue;
+      const slotName =
+        typeof slotOverride === "string" && slotOverride !== "1"
+          ? slotOverride.toLowerCase()
+          : defaultSlot;
+      const slot = slotName === undefined ? undefined : SLOT_NUMS[slotName];
+      if (slot !== undefined) out.push({ defindex, classNum, slot });
+    }
+  }
+  return out;
+}
+
 export async function fetchItemsGame(fetchImpl: typeof fetch = fetch): Promise<KV> {
   const res = await fetchImpl(ITEMS_GAME_URL);
   if (!res.ok) throw new Error(`items_game fetch HTTP ${res.status}`);
@@ -211,10 +261,12 @@ export function computeReskinGroups(itemsGame: KV): Map<number, number> {
     // vs 9-class golden pan are the same item) — EXCEPT building-slot items,
     // where engineer's toolbox and spy's sapper share item_class and would
     // otherwise merge cross-class into a nonsense "PDA" row
+    // slot intentionally excluded so engineer's primary shotgun unifies with
+    // the 3-class secondary family (per-slot denominators handle normalization)
     const sig =
       item.slot === "building"
-        ? `${item.itemClass}::${item.slot}::${item.classes.join(",")}::${item.gameplayAttrs}`
-        : `${item.itemClass}::${item.slot}::${item.gameplayAttrs}`;
+        ? `${item.itemClass}::building::${item.classes.join(",")}::${item.gameplayAttrs}`
+        : `${item.itemClass}::${item.gameplayAttrs}`;
     const list = groups.get(sig);
     if (list) list.push(item.defindex);
     else groups.set(sig, [item.defindex]);
