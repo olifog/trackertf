@@ -14,8 +14,10 @@ export const usageFiltersSchema = z.object({
   active: z.boolean().catch(false).default(false),
   /** minimum minutes played (0 = any; 120000 = "experienced") */
   minutes: z.number().int().nonnegative().catch(0).default(0),
-  /** merge reskins into their base item */
-  merge: z.boolean().catch(false).default(false),
+  /** merge functionally-identical reskins/stranges (launch default: on) */
+  merge: z.boolean().catch(true).default(true),
+  /** show PDA/builder pseudo-items (~100% rows hidden by default) */
+  pdas: z.boolean().catch(false).default(false),
 });
 export type UsageFilters = z.infer<typeof usageFiltersSchema>;
 
@@ -23,9 +25,11 @@ export interface UsageRow {
   defindex: number;
   usage: number;
   sampleSize: number;
+  computedAt: string;
   name: string | null;
   itemName: string | null;
   imageUrl: string | null;
+  reskinGroup: number | null;
 }
 
 let db: Db | undefined;
@@ -42,9 +46,11 @@ export const fetchUsage = createServerFn({ method: "GET" })
         defindex: schema.usageStats.defindex,
         usage: schema.usageStats.usage,
         sampleSize: schema.usageStats.sampleSize,
+        computedAt: schema.usageStats.computedAt,
         name: schema.itemSchema.name,
         itemName: schema.itemSchema.itemName,
         imageUrl: schema.itemSchema.imageUrl,
+        reskinGroup: schema.itemSchema.reskinGroup,
       })
       .from(schema.usageStats)
       .leftJoin(schema.itemSchema, eq(schema.usageStats.defindex, schema.itemSchema.defindex))
@@ -58,8 +64,8 @@ export const fetchUsage = createServerFn({ method: "GET" })
         ),
       )
       .orderBy(desc(schema.usageStats.usage))
-      .limit(50);
-    return rows;
+      .limit(150);
+    return rows.map((r) => ({ ...r, computedAt: r.computedAt.toISOString() }));
   });
 
 export const usageQueryOptions = (filters: UsageFilters) =>

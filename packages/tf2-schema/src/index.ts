@@ -2,8 +2,10 @@ import { type Db, schema } from "@trackertf/db";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { computeReskinGroups, fetchItemsGame } from "./items-game.ts";
+import { fetchLocalization, localizeName } from "./localization.ts";
 
 export { computeReskinGroups, fetchItemsGame } from "./items-game.ts";
+export { fetchLocalization, localizeName } from "./localization.ts";
 export { parseVdf } from "./vdf.ts";
 
 /** Web API class numbering (class number - 1 indexes stock loadouts). */
@@ -46,6 +48,7 @@ const schemaItemsPage = z.object({
  * (GameTracking-TF2) in a later pass — see PLAN.md.
  */
 export async function syncItemSchema(db: Db, apiKey: string): Promise<number> {
+  const loc = await fetchLocalization();
   let start: number | undefined = 0;
   let count = 0;
 
@@ -60,7 +63,7 @@ export async function syncItemSchema(db: Db, apiKey: string): Promise<number> {
     const rows = page.result.items.map((item) => ({
       defindex: item.defindex,
       name: item.name,
-      itemName: item.item_name ?? null,
+      itemName: localizeName(item.item_name, loc),
       imageUrl: item.image_url ?? null,
       slot: item.item_slot ?? null,
       usedByClasses:
