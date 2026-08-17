@@ -162,6 +162,21 @@ reskin_group)` — reskin_group hand-curated + prefab-derived, enables "merge re
   shareable filter URLs — TanStack Router typed search params are ideal), ISR 1h.
 - Launch: tracker.tf live with old functionality + reskin merge + visible methodology page.
 
+**Lessons from the 2022 Reddit feedback (r/tf2 + r/truetf2 comment archive):**
+- #1 complaint: quality/reskin splitting corrupted headline numbers. Strange/renamed stock
+  items are SEPARATE defindexes ("Upgradeable TF_WEAPON_*" — construction PDA showed 90%
+  instead of 100%; stock shotgun looked unpopular vs a dozen <1% variants). Functional-group
+  merging (strange/renamed/festive/botkiller/skins/true reskins; watch the Vintage
+  Lugermorph separate-defindex case) must be the DEFAULT view at launch, with expandable
+  per-variant breakdown ("Stock & reskins: xx%" → rows). The merge=false view is the toggle.
+- Requested and promised in 2022: all-slots-at-once view with ignore-cosmetics/taunts
+  toggles (not just per-slot); weapon-overlap correlations ("if ubersaw, what else?") —
+  now Stage 3 loadout combos.
+- Biases users caught, to document on the methodology page: friend-BFS skews rich/active
+  (gold frying pan at 1% on sniper; 27% "active" rate was implausible); equip data is the
+  ACTIVE loadout preset only (troll-loadout noise assumed to cancel out); renamed-unique vs
+  strange indistinguishable within Upgradeable defindexes.
+
 ### Stage 3 — The new stats (the interesting part)
 
 - Owner-equip rates (equipped | owned — needs ownership from the same GetPlayerItems data).
