@@ -51,19 +51,32 @@ async function recompute(): Promise<void> {
           select merged, class_num, -1, defindex, sum(c)::int from counts group by merged, class_num, defindex
           union all
           select merged, -1, -1, defindex, sum(c)::int from counts group by merged, defindex
+        ),
+        -- class=Any denominators: per-item class count, and for merged groups
+        -- the UNION of classes across members (engineer+spy builders etc.)
+        own_classes as (
+          select s.defindex, greatest(count(distinct c.c), 1)::int n
+          from item_schema s cross join lateral unnest(s.used_by_classes) c(c)
+          group by s.defindex
+        ),
+        group_classes as (
+          select coalesce(s.reskin_group, s.defindex) gid, greatest(count(distinct c.c), 1)::int n
+          from item_schema s cross join lateral unnest(s.used_by_classes) c(c)
+          group by 1
         )
         insert into usage_stats
           (defindex, class_num, slot, active_only, minutes_threshold, merge_reskins,
-           usage, sample_size, computed_at)
+           usage, count, sample_size, computed_at)
         select
           r.defindex, r.class_num, r.slot, ${pop.active}, ${pop.minutes}, r.merged,
           -- class=Any divides by per-class equip opportunities (old styletf semantics)
           r.c::real / (t.n * case when r.class_num = -1
-            then greatest(coalesce(array_length(s.used_by_classes, 1), 9), 1) else 1 end),
-          t.n, now()
+            then coalesce(case when r.merged then g.n else o.n end, 9) else 1 end),
+          r.c, t.n, now()
         from rollups r
         cross join total t
-        left join item_schema s on s.defindex = r.defindex
+        left join own_classes o on o.defindex = r.defindex
+        left join group_classes g on g.gid = r.defindex
         where t.n > 0
       `);
     }

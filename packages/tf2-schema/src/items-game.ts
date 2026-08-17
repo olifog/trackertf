@@ -65,8 +65,23 @@ const COSMETIC_ATTRS = new Set(
     "turn to gold",
     "SPELL: set item tint RGB",
     "SPELL: set Halloween footstep type",
+    "disable fancy class select anim",
+    "override projectile type",
+    "vision opt in flags",
+    "pyrovision only DISPLAY ONLY",
+    "pyrovision opt in DISPLAY ONLY",
   ].map((s) => s.toLowerCase()),
 );
+
+/**
+ * Community-consensus reskins whose tiny stat quirks the signature system
+ * rightly flags (centered rockets, taunt differences) but players treat as
+ * pure reskins. Maps defindex → base-item defindex.
+ */
+const MANUAL_MERGES: ReadonlyMap<number, number> = new Map([
+  [513, 18], // The Original → Rocket Launcher (centerfire projectile)
+  [741, 21], // The Rainblower → Flame Thrower (pyrovision + armageddon taunt)
+]);
 
 /** Weapon-ish slots eligible for functional-group merging. Cosmetics/taunts
  * share item_class (tf_wearable etc.) and would over-merge catastrophically. */
@@ -200,6 +215,11 @@ export function computeReskinGroups(itemsGame: KV): Map<number, number> {
     if (members.length < 2) continue;
     const groupId = Math.min(...members);
     for (const d of members) out.set(d, groupId);
+  }
+  for (const [variant, base] of MANUAL_MERGES) {
+    const groupId = out.get(base) ?? base;
+    out.set(variant, groupId);
+    out.set(base, groupId);
   }
   return out;
 }

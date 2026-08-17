@@ -24,12 +24,15 @@ export type UsageFilters = z.infer<typeof usageFiltersSchema>;
 export interface UsageRow {
   defindex: number;
   usage: number;
+  count: number;
   sampleSize: number;
   computedAt: string;
   name: string | null;
   itemName: string | null;
   imageUrl: string | null;
   reskinGroup: number | null;
+  slotName: string | null;
+  usedByClasses: number[] | null;
 }
 
 let db: Db | undefined;
@@ -38,34 +41,56 @@ function getDb(): Db {
   return db;
 }
 
+export interface UsageResponse {
+  rows: UsageRow[];
+  /** individual reskin-group members (merge view only), for row expansion */
+  variants: UsageRow[];
+}
+
+function selectUsage(db: Db, filters: UsageFilters, merged: boolean) {
+  return db
+    .select({
+      defindex: schema.usageStats.defindex,
+      usage: schema.usageStats.usage,
+      count: schema.usageStats.count,
+      sampleSize: schema.usageStats.sampleSize,
+      computedAt: schema.usageStats.computedAt,
+      name: schema.itemSchema.name,
+      itemName: schema.itemSchema.itemName,
+      imageUrl: schema.itemSchema.imageUrl,
+      reskinGroup: schema.itemSchema.reskinGroup,
+      slotName: schema.itemSchema.slot,
+      usedByClasses: schema.itemSchema.usedByClasses,
+    })
+    .from(schema.usageStats)
+    .leftJoin(schema.itemSchema, eq(schema.usageStats.defindex, schema.itemSchema.defindex))
+    .where(
+      and(
+        eq(schema.usageStats.classNum, filters.class),
+        eq(schema.usageStats.slot, filters.slot),
+        eq(schema.usageStats.activeOnly, filters.active),
+        eq(schema.usageStats.minutesThreshold, filters.minutes),
+        eq(schema.usageStats.mergeReskins, merged),
+      ),
+    )
+    .orderBy(desc(schema.usageStats.usage));
+}
+
 export const fetchUsage = createServerFn({ method: "GET" })
   .validator(usageFiltersSchema)
-  .handler(async ({ data }): Promise<UsageRow[]> => {
-    const rows = await getDb()
-      .select({
-        defindex: schema.usageStats.defindex,
-        usage: schema.usageStats.usage,
-        sampleSize: schema.usageStats.sampleSize,
-        computedAt: schema.usageStats.computedAt,
-        name: schema.itemSchema.name,
-        itemName: schema.itemSchema.itemName,
-        imageUrl: schema.itemSchema.imageUrl,
-        reskinGroup: schema.itemSchema.reskinGroup,
-      })
-      .from(schema.usageStats)
-      .leftJoin(schema.itemSchema, eq(schema.usageStats.defindex, schema.itemSchema.defindex))
-      .where(
-        and(
-          eq(schema.usageStats.classNum, data.class),
-          eq(schema.usageStats.slot, data.slot),
-          eq(schema.usageStats.activeOnly, data.active),
-          eq(schema.usageStats.minutesThreshold, data.minutes),
-          eq(schema.usageStats.mergeReskins, data.merge),
-        ),
-      )
-      .orderBy(desc(schema.usageStats.usage))
-      .limit(150);
-    return rows.map((r) => ({ ...r, computedAt: r.computedAt.toISOString() }));
+  .handler(async ({ data }): Promise<UsageResponse> => {
+    const toIso = (r: Omit<UsageRow, "computedAt"> & { computedAt: Date }): UsageRow => ({
+      ...r,
+      computedAt: r.computedAt.toISOString(),
+    });
+    const rows = (await selectUsage(getDb(), data, data.merge).limit(150)).map(toIso);
+    // merge view: also ship per-variant rows so groups can expand in place
+    const variants = data.merge
+      ? (await selectUsage(getDb(), data, false).limit(600))
+          .filter((r) => r.reskinGroup !== null)
+          .map(toIso)
+      : [];
+    return { rows, variants };
   });
 
 export const usageQueryOptions = (filters: UsageFilters) =>

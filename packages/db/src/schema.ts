@@ -179,6 +179,8 @@ export const usageStats = pgTable(
     minutesThreshold: integer().notNull(),
     mergeReskins: boolean().notNull(),
     usage: real().notNull(),
+    /** raw equip count (un-normalized, unlike usage for class=Any rows) */
+    count: integer().notNull().default(0),
     sampleSize: integer().notNull(),
     computedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },

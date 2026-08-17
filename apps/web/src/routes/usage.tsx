@@ -1,5 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
+import { Switch } from "#/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -43,6 +45,31 @@ const SLOTS = [
   { num: 8, label: "Taunt" },
 ] as const;
 
+const CLASS_ICONS: Record<number, string> = {
+  1: "Scout",
+  2: "Sniper",
+  3: "Soldier",
+  4: "Demoman",
+  5: "Medic",
+  6: "Heavy",
+  7: "Pyro",
+  8: "Spy",
+  9: "Engineer",
+};
+
+const SLOT_DISPLAY: Record<string, string> = {
+  primary: "Primary",
+  secondary: "Secondary",
+  melee: "Melee",
+  pda: "PDA",
+  pda2: "PDA2",
+  building: "Building",
+  misc: "Cosmetic",
+  head: "Cosmetic",
+  taunt: "Taunt",
+  action: "Action",
+};
+
 /** PDA/builder pseudo-items every player of a class "equips" (~100% rows). */
 const PDA_NAMES = new Set([
   "TF_WEAPON_PDA_ENGINEER_BUILD",
@@ -60,8 +87,6 @@ export const Route = createFileRoute("/usage")({
   component: UsagePage,
 });
 
-type SearchPatch = Partial<ReturnType<typeof Route.useSearch>>;
-
 /** Stock items carry localization tokens when tf_english lacks them. */
 function displayName(item: UsageRow): string {
   if (item.itemName && !item.itemName.startsWith("#")) return item.itemName;
@@ -73,7 +98,17 @@ function displayName(item: UsageRow): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function Chip({
+type SearchPatch = Partial<ReturnType<typeof Route.useSearch>>;
+
+function Segmented({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="inline-flex overflow-hidden rounded-md border divide-x divide-border">
+      {children}
+    </div>
+  );
+}
+
+function Segment({
   children,
   active,
   patch,
@@ -89,10 +124,10 @@ function Chip({
       from={Route.fullPath}
       search={(prev) => ({ ...prev, ...patch })}
       title={title}
-      className={`inline-flex h-7 items-center gap-1.5 rounded px-2 text-[13px] leading-none transition-colors ${
+      className={`flex h-8 items-center px-2.5 text-[13px] leading-none transition-colors ${
         active
           ? "bg-primary font-medium text-primary-foreground"
-          : "bg-secondary/60 text-secondary-foreground hover:bg-accent"
+          : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
       }`}
     >
       {children}
@@ -102,22 +137,65 @@ function Chip({
 
 function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline gap-3">
+    <div className="flex items-center gap-3">
       <span className="w-16 shrink-0 text-right font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
         {label}
       </span>
-      <div className="flex flex-wrap items-center gap-1">{children}</div>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">{children}</div>
     </div>
+  );
+}
+
+function SwitchFilter({
+  label,
+  checked,
+  patch,
+}: {
+  label: string;
+  checked: boolean;
+  patch: (next: boolean) => SearchPatch;
+}) {
+  const navigate = Route.useNavigate();
+  return (
+    <label className="flex cursor-pointer items-center gap-2 text-[13px] text-secondary-foreground">
+      <Switch
+        size="sm"
+        checked={checked}
+        onCheckedChange={(next) => navigate({ search: (prev) => ({ ...prev, ...patch(next) }) })}
+      />
+      {label}
+    </label>
   );
 }
 
 function UsagePage() {
   const search = Route.useSearch();
-  const { data: rows } = useSuspenseQuery(usageQueryOptions(search));
+  const { data } = useSuspenseQuery(usageQueryOptions(search));
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
 
-  const items = rows.filter((r) => search.pdas || !PDA_NAMES.has(r.name ?? ""));
-  const sample = rows[0]?.sampleSize;
-  const computedAt = rows[0]?.computedAt;
+  const variantsByGroup = useMemo(() => {
+    const map = new Map<number, UsageRow[]>();
+    for (const v of data.variants) {
+      if (v.reskinGroup === null) continue;
+      const list = map.get(v.reskinGroup);
+      if (list) list.push(v);
+      else map.set(v.reskinGroup, [v]);
+    }
+    return map;
+  }, [data.variants]);
+
+  const items = data.rows.filter((r) => search.pdas || !PDA_NAMES.has(r.name ?? ""));
+  const sample = data.rows[0]?.sampleSize;
+  const computedAt = data.rows[0]?.computedAt;
+
+  function toggleExpand(defindex: number): void {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(defindex)) next.delete(defindex);
+      else next.add(defindex);
+      return next;
+    });
+  }
 
   return (
     <div className="space-y-5">
@@ -131,51 +209,66 @@ function UsagePage() {
         )}
       </div>
 
-      <div className="space-y-2.5 rounded-lg border bg-card/50 p-4">
+      <div className="space-y-3 rounded-lg border bg-card/50 p-4">
         <FilterRow label="Class">
-          <Chip active={search.class === -1} patch={{ class: -1 }}>
-            Any
-          </Chip>
-          {CLASSES.map((c) => (
-            <Chip
-              key={c.num}
-              active={search.class === c.num}
-              patch={{ class: c.num }}
-              title={c.label}
-            >
-              <img src={`/${c.label}.svg`} alt="" className="h-4 w-4" />
-              <span className="hidden sm:inline">{c.label}</span>
-            </Chip>
-          ))}
+          <Segmented>
+            <Segment active={search.class === -1} patch={{ class: -1 }}>
+              Any
+            </Segment>
+            {CLASSES.map((c) => (
+              <Segment
+                key={c.num}
+                active={search.class === c.num}
+                patch={{ class: c.num }}
+                title={c.label}
+              >
+                <img
+                  src={`/${c.label}.svg`}
+                  alt={c.label}
+                  className={`h-4.5 w-4.5 ${search.class === c.num ? "" : "opacity-80"}`}
+                />
+              </Segment>
+            ))}
+          </Segmented>
         </FilterRow>
 
         <FilterRow label="Slot">
-          <Chip active={search.slot === -1} patch={{ slot: -1 }}>
-            Any
-          </Chip>
-          {SLOTS.map((s) => (
-            <Chip key={s.num} active={search.slot === s.num} patch={{ slot: s.num }}>
-              {s.label}
-            </Chip>
-          ))}
+          <Segmented>
+            <Segment active={search.slot === -1} patch={{ slot: -1 }}>
+              Any
+            </Segment>
+            {SLOTS.map((s) => (
+              <Segment key={s.num} active={search.slot === s.num} patch={{ slot: s.num }}>
+                {s.label}
+              </Segment>
+            ))}
+          </Segmented>
         </FilterRow>
 
         <FilterRow label="Players">
-          <Chip active={search.active} patch={{ active: !search.active }}>
-            {search.active ? "✓ " : ""}Active (played last 2 weeks)
-          </Chip>
-          <Chip active={search.minutes > 0} patch={{ minutes: search.minutes > 0 ? 0 : 120_000 }}>
-            {search.minutes > 0 ? "✓ " : ""}Experienced (2000+ hours)
-          </Chip>
+          <SwitchFilter
+            label="Active in the last 2 weeks"
+            checked={search.active}
+            patch={(next) => ({ active: next })}
+          />
+          <SwitchFilter
+            label="2000+ hours played"
+            checked={search.minutes > 0}
+            patch={(next) => ({ minutes: next ? 120_000 : 0 })}
+          />
         </FilterRow>
 
         <FilterRow label="Options">
-          <Chip active={search.merge} patch={{ merge: !search.merge }}>
-            {search.merge ? "✓ " : ""}Merge reskins &amp; stranges
-          </Chip>
-          <Chip active={!search.pdas} patch={{ pdas: !search.pdas }}>
-            {!search.pdas ? "✓ " : ""}Hide PDAs
-          </Chip>
+          <SwitchFilter
+            label="Merge reskins & stranges"
+            checked={search.merge}
+            patch={(next) => ({ merge: next })}
+          />
+          <SwitchFilter
+            label="Hide PDAs"
+            checked={!search.pdas}
+            patch={(next) => ({ pdas: !next })}
+          />
         </FilterRow>
       </div>
 
@@ -190,48 +283,170 @@ function UsagePage() {
               <TableHead className="w-10 text-right">#</TableHead>
               <TableHead className="w-9" />
               <TableHead>Item</TableHead>
-              <TableHead className="w-20 text-right font-mono text-xs">defindex</TableHead>
+              {search.class === -1 && <TableHead className="w-32">Classes</TableHead>}
+              {search.slot === -1 && <TableHead className="w-24">Slot</TableHead>}
+              <TableHead className="w-20 text-right">Players</TableHead>
               <TableHead className="w-44 text-right">Usage</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((item, index) => (
-              <TableRow key={item.defindex} className="h-9">
-                <TableCell className="py-1 text-right font-mono text-muted-foreground">
-                  {index + 1}
-                </TableCell>
-                <TableCell className="py-0.5">
-                  {item.imageUrl && (
-                    <img src={item.imageUrl} alt="" className="h-7 w-7" loading="lazy" />
-                  )}
-                </TableCell>
-                <TableCell className="py-1">
-                  {displayName(item)}
-                  {search.merge && item.reskinGroup !== null && (
-                    <span className="ml-1.5 text-[11px] text-muted-foreground">+reskins</span>
-                  )}
-                </TableCell>
-                <TableCell className="py-1 text-right font-mono text-xs text-muted-foreground">
-                  {item.defindex}
-                </TableCell>
-                <TableCell className="py-1">
-                  <div className="flex items-center justify-end gap-2">
-                    <div className="h-1.5 w-24 overflow-hidden rounded-full bg-secondary">
-                      <div
-                        className="h-full rounded-full bg-primary"
-                        style={{ width: `${Math.min(item.usage * 100, 100)}%` }}
-                      />
-                    </div>
-                    <span className="w-14 text-right font-mono text-sm tabular-nums">
-                      {(item.usage * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+            {items.map((item, index) => {
+              const variants =
+                search.merge && item.reskinGroup !== null
+                  ? (variantsByGroup.get(item.reskinGroup) ?? [])
+                  : [];
+              const expandable = variants.length > 0;
+              const isOpen = expandable && expanded.has(item.defindex);
+              return (
+                <ItemRows
+                  key={item.defindex}
+                  item={item}
+                  rank={index + 1}
+                  variants={variants}
+                  expandable={expandable}
+                  isOpen={isOpen}
+                  onToggle={() => toggleExpand(item.defindex)}
+                  showClasses={search.class === -1}
+                  showSlot={search.slot === -1}
+                />
+              );
+            })}
           </TableBody>
         </Table>
       )}
+    </div>
+  );
+}
+
+function ItemName({ item, dim }: { item: UsageRow; dim?: boolean }) {
+  return (
+    <span className={dim ? "text-[13px] text-muted-foreground" : ""}>
+      {displayName(item)}
+      <span className="ml-1.5 font-mono text-[11px] text-muted-foreground/50">
+        #{item.defindex}
+      </span>
+    </span>
+  );
+}
+
+function ClassIcons({ classes }: { classes: number[] | null }) {
+  if (!classes) return null;
+  if (classes.length === 9) {
+    return <span className="text-[11px] text-muted-foreground">All classes</span>;
+  }
+  return (
+    <span className="flex gap-0.5">
+      {classes.map((c) => {
+        const label = CLASS_ICONS[c];
+        return label ? (
+          <img
+            key={c}
+            src={`/${label}.svg`}
+            alt={label}
+            title={label}
+            className="h-3.5 w-3.5 opacity-70"
+          />
+        ) : null;
+      })}
+    </span>
+  );
+}
+
+function ItemRows({
+  item,
+  rank,
+  variants,
+  expandable,
+  isOpen,
+  onToggle,
+  showClasses,
+  showSlot,
+}: {
+  item: UsageRow;
+  rank: number;
+  variants: UsageRow[];
+  expandable: boolean;
+  isOpen: boolean;
+  onToggle: () => void;
+  showClasses: boolean;
+  showSlot: boolean;
+}) {
+  const extraCols = (showClasses ? 1 : 0) + (showSlot ? 1 : 0);
+  return (
+    <>
+      <TableRow
+        className={`h-9 ${expandable ? "cursor-pointer" : ""}`}
+        onClick={expandable ? onToggle : undefined}
+      >
+        <TableCell className="py-1 text-right font-mono text-muted-foreground">{rank}</TableCell>
+        <TableCell className="py-0.5">
+          {item.imageUrl && <img src={item.imageUrl} alt="" className="h-7 w-7" loading="lazy" />}
+        </TableCell>
+        <TableCell className="py-1">
+          <ItemName item={item} />
+          {expandable && (
+            <span className="ml-1.5 font-mono text-[11px] text-primary/70">
+              {isOpen ? "▾" : "▸"} {variants.length} variants
+            </span>
+          )}
+        </TableCell>
+        {showClasses && (
+          <TableCell className="py-1">
+            <ClassIcons classes={item.usedByClasses} />
+          </TableCell>
+        )}
+        {showSlot && (
+          <TableCell className="py-1 text-xs text-muted-foreground">
+            {item.slotName ? (SLOT_DISPLAY[item.slotName] ?? item.slotName) : ""}
+          </TableCell>
+        )}
+        <TableCell className="py-1 text-right font-mono text-xs text-muted-foreground tabular-nums">
+          {item.count.toLocaleString()}
+        </TableCell>
+        <TableCell className="py-1">
+          <UsageBar usage={item.usage} />
+        </TableCell>
+      </TableRow>
+      {isOpen &&
+        variants.map((v) => (
+          <TableRow key={v.defindex} className="h-8 bg-secondary/20 hover:bg-secondary/30">
+            <TableCell className="py-0.5" />
+            <TableCell className="py-0.5 text-right">
+              {v.imageUrl && (
+                <img src={v.imageUrl} alt="" className="ml-auto h-5 w-5" loading="lazy" />
+              )}
+            </TableCell>
+            <TableCell className="py-0.5 pl-6" colSpan={1 + extraCols}>
+              <ItemName item={v} dim />
+            </TableCell>
+            <TableCell className="py-0.5 text-right font-mono text-xs text-muted-foreground/70 tabular-nums">
+              {v.count.toLocaleString()}
+            </TableCell>
+            <TableCell className="py-0.5">
+              <div className="flex items-center justify-end">
+                <span className="w-14 text-right font-mono text-xs text-muted-foreground tabular-nums">
+                  {(v.usage * 100).toFixed(1)}%
+                </span>
+              </div>
+            </TableCell>
+          </TableRow>
+        ))}
+    </>
+  );
+}
+
+function UsageBar({ usage }: { usage: number }) {
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-secondary">
+        <div
+          className="h-full rounded-full bg-primary"
+          style={{ width: `${Math.min(usage * 100, 100)}%` }}
+        />
+      </div>
+      <span className="w-14 text-right font-mono text-sm tabular-nums">
+        {(usage * 100).toFixed(1)}%
+      </span>
     </div>
   );
 }

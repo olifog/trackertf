@@ -1,0 +1,1 @@
+ALTER TABLE "usage_stats" ADD COLUMN "count" integer DEFAULT 0 NOT NULL;
