@@ -71,6 +71,24 @@ export const playerStatsRaw = pgTable("player_stats_raw", {
   payload: jsonb().notNull(),
 });
 
+/**
+ * Append-only stat snapshots — the raw material for delta attribution
+ * (recrawl diffs = session-window observations). Never overwritten.
+ */
+export const playerStatSnapshots = pgTable(
+  "player_stat_snapshots",
+  {
+    steamid: text().notNull(),
+    fetchedAt: timestamp({ withTimezone: true }).notNull(),
+    /** full GetUserStatsForGame name→value map */
+    payload: jsonb().notNull(),
+    /** parsed equipped loadout at the same instant ([[defindex,class,slot],...]) */
+    loadout: jsonb(),
+    tf2Minutes: integer(),
+  },
+  (t) => [primaryKey({ columns: [t.steamid, t.fetchedAt] })],
+);
+
 /** Latest raw friend list ([{steamid, friend_since}]) — the social graph. */
 export const playerFriendsRaw = pgTable("player_friends_raw", {
   steamid: text()

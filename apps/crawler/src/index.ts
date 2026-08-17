@@ -173,6 +173,21 @@ async function crawlOne({ steamid, source }: FrontierItem): Promise<void> {
           target: schema.playerStatsRaw.steamid,
           set: { fetchedAt, payload: Object.fromEntries(stats.data) },
         });
+      // append-only history for delta attribution (loadout captured jointly
+      // so windows know what was equipped while the stats accrued)
+      await tx
+        .insert(schema.playerStatSnapshots)
+        .values({
+          steamid,
+          fetchedAt,
+          payload: Object.fromEntries(stats.data),
+          loadout:
+            items.kind === "ok"
+              ? parseEquipped(items.data).map((e) => [e.defindex, e.classNum, e.slot])
+              : null,
+          tf2Minutes: playtime.kind === "ok" ? playtime.data.minutes : null,
+        })
+        .onConflictDoNothing();
       await tx.delete(schema.playerClassStats).where(eq(schema.playerClassStats.steamid, steamid));
       const classStats = parseClassStats(stats.data).map((row) => ({ steamid, ...row }));
       if (classStats.length > 0) await tx.insert(schema.playerClassStats).values(classStats);
