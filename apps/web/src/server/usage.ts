@@ -35,6 +35,11 @@ export interface UsageRow {
   usedByClasses: number[] | null;
 }
 
+const toIso = (r: Omit<UsageRow, "computedAt"> & { computedAt: Date }): UsageRow => ({
+  ...r,
+  computedAt: r.computedAt.toISOString(),
+});
+
 let db: Db | undefined;
 function getDb(): Db {
   db ??= createDbFromEnv();
@@ -47,8 +52,8 @@ export interface UsageResponse {
   variants: UsageRow[];
 }
 
-function selectUsage(db: Db, filters: UsageFilters, merged: boolean, onlyGrouped = false) {
-  return db
+function selectUsage(database: Db, filters: UsageFilters, merged: boolean, onlyGrouped = false) {
+  return database
     .select({
       defindex: schema.usageStats.defindex,
       usage: schema.usageStats.usage,
@@ -80,10 +85,6 @@ function selectUsage(db: Db, filters: UsageFilters, merged: boolean, onlyGrouped
 export const fetchUsage = createServerFn({ method: "GET" })
   .validator(usageFiltersSchema)
   .handler(async ({ data }): Promise<UsageResponse> => {
-    const toIso = (r: Omit<UsageRow, "computedAt"> & { computedAt: Date }): UsageRow => ({
-      ...r,
-      computedAt: r.computedAt.toISOString(),
-    });
     const rows = (await selectUsage(getDb(), data, data.merge).limit(150)).map(toIso);
     // merge view: also ship per-variant rows so groups can expand in place
     // (grouped-only filter lives in SQL — a JS post-limit filter dropped

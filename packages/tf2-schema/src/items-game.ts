@@ -155,7 +155,7 @@ function gameplayAttrSignature(item: KV): string {
       parts.push(`${name.toLowerCase()}=${typeof v === "string" ? v : JSON.stringify(v)}`);
     }
   }
-  return parts.sort().join("|");
+  return parts.toSorted().join("|");
 }
 
 export async function fetchItemsGame(fetchImpl: typeof fetch = fetch): Promise<KV> {
@@ -194,7 +194,7 @@ export function computeReskinGroups(itemsGame: KV): Map<number, number> {
     const classes = usedBy
       ? Object.keys(usedBy)
           .map((c) => c.toLowerCase())
-          .sort()
+          .toSorted()
       : ["all"];
     resolved.push({
       defindex,
