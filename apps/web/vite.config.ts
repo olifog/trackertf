@@ -8,14 +8,14 @@ export default defineConfig({
   resolve: { tsconfigPaths: true },
   plugins: [
     nitro({
-      // ISR on stat pages — the tracker.tf equivalent of styletf's
-      // Next.js `revalidate: 3600`. allowQuery is REQUIRED: without it Vercel
-      // caches one page for every filter combination (query params ignored).
+      // CDN caching on stat pages (equivalent of styletf's revalidate: 3600).
+      // NOT Vercel ISR: its prerender wrapper strips query params from the
+      // request (verified 2026-08-17), breaking filtered SSR. s-maxage caches
+      // per full URL (query included) on Vercel's CDN instead.
       routeRules: {
         "/usage": {
-          isr: {
-            expiration: 3600,
-            allowQuery: ["class", "slot", "active", "minutes", "merge", "pdas"],
+          headers: {
+            "cache-control": "public, s-maxage=3600, stale-while-revalidate=86400",
           },
         },
       },
