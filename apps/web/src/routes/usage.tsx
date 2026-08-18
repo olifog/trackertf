@@ -1,6 +1,7 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Slider } from "#/components/ui/slider";
 import { Switch } from "#/components/ui/switch";
 import {
   Table,
@@ -10,12 +11,12 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
-import { type UsageRow, usageFiltersSchema, usageQueryOptions } from "#/server/usage";
+import { type UsageRow, usageFiltersSchema, usageInfiniteQueryOptions } from "#/server/usage";
 
 const DEFAULT_FILTERS = {
   class: -1,
   slot: -1,
-  active: false,
+  active: 0,
   minutes: 0,
   merge: true,
   pdas: false,
@@ -43,6 +44,23 @@ const SLOTS = [
   { num: 6, label: "Watch" },
   { num: 7, label: "Cosmetic" },
   { num: 8, label: "Taunt" },
+] as const;
+
+/** lifetime-playtime slider stops (values = minutes thresholds) */
+const HOURS_STOPS = [
+  { value: 0, label: "All" },
+  { value: 30_000, label: "500h+" },
+  { value: 60_000, label: "1000h+" },
+  { value: 120_000, label: "2000h+" },
+  { value: 240_000, label: "4000h+" },
+] as const;
+
+/** minutes-in-last-2-weeks slider stops */
+const ACTIVE_STOPS = [
+  { value: 0, label: "All" },
+  { value: 1, label: "Played" },
+  { value: 300, label: "5h+" },
+  { value: 900, label: "15h+" },
 ] as const;
 
 const CLASS_ICONS: Record<number, string> = {
@@ -101,7 +119,18 @@ export const Route = createFileRoute("/usage")({
   validateSearch: usageFiltersSchema,
   search: { middlewares: [stripSearchParams(DEFAULT_FILTERS)] },
   loaderDeps: ({ search }) => search,
-  loader: ({ context, deps }) => context.queryClient.ensureQueryData(usageQueryOptions(deps)),
+  loader: ({ context, deps }) => {
+    // Block navigation (SSR data / pending skeleton) only when no usage query
+    // holds data yet. Filter changes on the page resolve instantly and keep
+    // the old rows under a fetching overlay (keepPreviousData).
+    const hasData = context.queryClient
+      .getQueriesData({ queryKey: ["usage"] })
+      .some(([, data]) => data !== undefined);
+    const ensured = context.queryClient.ensureInfiniteQueryData(usageInfiniteQueryOptions(deps));
+    if (!hasData) return ensured;
+    ensured.catch(() => {});
+    return undefined;
+  },
   component: UsagePage,
 });
 
@@ -186,36 +215,105 @@ function SwitchFilter({
   );
 }
 
+/** slider over discrete precomputed stops; drags snap, labels jump on click */
+function StopSlider({
+  stops,
+  value,
+  patch,
+}: {
+  stops: readonly { value: number; label: string }[];
+  value: number;
+  patch: (next: number) => SearchPatch;
+}) {
+  const navigate = Route.useNavigate();
+  const committed = Math.max(
+    0,
+    stops.findIndex((s) => s.value === value),
+  );
+  const [dragging, setDragging] = useState<number | null>(null);
+  const index = dragging ?? committed;
+  const commit = (i: number) =>
+    void navigate({ search: (prev) => ({ ...prev, ...patch(stops[i]?.value ?? 0) }) });
+  return (
+    <div className="w-64 pt-1">
+      <Slider
+        value={[index]}
+        min={0}
+        max={stops.length - 1}
+        step={1}
+        onValueChange={(v) => setDragging(Array.isArray(v) ? (v[0] ?? 0) : v)}
+        onValueCommitted={(v) => {
+          setDragging(null);
+          commit(Array.isArray(v) ? (v[0] ?? 0) : v);
+        }}
+      />
+      <div className="mt-1.5 flex justify-between">
+        {stops.map((s, i) => (
+          <button
+            key={s.value}
+            type="button"
+            onClick={() => commit(i)}
+            className={`cursor-pointer font-mono text-[10px] leading-none transition-colors first:text-left last:text-right ${
+              i === index ? "font-semibold text-foreground" : "text-muted-foreground/70"
+            }`}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function UsagePage() {
   const search = Route.useSearch();
-  const { data } = useSuspenseQuery(usageQueryOptions(search));
+  const query = useInfiniteQuery({
+    ...usageInfiniteQueryOptions(search),
+    placeholderData: keepPreviousData,
+  });
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
-  const [showAll, setShowAll] = useState(false);
   const [filter, setFilter] = useState("");
 
+  const pages = query.data?.pages;
+  const rows = useMemo(() => pages?.flatMap((p) => p.rows) ?? [], [pages]);
   const variantsByGroup = useMemo(() => {
     const map = new Map<number, UsageRow[]>();
-    for (const v of data.variants) {
+    for (const v of pages?.[0]?.variants ?? []) {
       if (v.reskinGroup === null) continue;
       const list = map.get(v.reskinGroup);
       if (list) list.push(v);
       else map.set(v.reskinGroup, [v]);
     }
     return map;
-  }, [data.variants]);
+  }, [pages]);
 
-  const query = filter.trim().toLowerCase();
-  const allItems = data.rows.filter(
+  const needle = filter.trim().toLowerCase();
+  const items = rows.filter(
     (r) =>
       (search.pdas || !PDA_NAMES.has(r.name ?? "")) &&
-      (!query ||
-        displayName(r).toLowerCase().includes(query) ||
-        (r.name ?? "").toLowerCase().includes(query) ||
-        String(r.defindex).includes(query)),
+      (!needle ||
+        displayName(r).toLowerCase().includes(needle) ||
+        (r.name ?? "").toLowerCase().includes(needle) ||
+        String(r.defindex).includes(needle)),
   );
-  const items = showAll ? allItems : allItems.slice(0, 100);
-  const sample = data.rows[0]?.sampleSize;
-  const computedAt = data.rows[0]?.computedAt;
+  const sample = pages?.[0]?.sampleSize;
+  const computedAt = pages?.[0]?.computedAt;
+
+  // infinite scroll: sentinel below the table pulls the next page into view
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = query;
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasNextPage) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && !isFetchingNextPage) void fetchNextPage();
+      },
+      { rootMargin: "600px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   function toggleExpand(defindex: number): void {
     setExpanded((prev) => {
@@ -230,7 +328,7 @@ function UsagePage() {
     <div className="space-y-5">
       <div className="flex items-baseline justify-between">
         <h1 className="font-heading text-2xl font-bold">Weapon usage</h1>
-        {sample !== undefined && (
+        {sample !== null && sample !== undefined && (
           <p className="font-mono text-xs text-muted-foreground">
             n = {sample.toLocaleString()} players
             {computedAt && <span suppressHydrationWarning> · updated {formatAgo(computedAt)}</span>}
@@ -274,17 +372,22 @@ function UsagePage() {
           </Segmented>
         </FilterRow>
 
-        <FilterRow label="Players">
-          <SwitchFilter
-            label="Active in the last 2 weeks"
-            checked={search.active}
+        <FilterRow label="Hours">
+          <StopSlider
+            stops={HOURS_STOPS}
+            value={search.minutes}
+            patch={(next) => ({ minutes: next })}
+          />
+          <span className="text-[11px] text-muted-foreground">lifetime TF2 playtime</span>
+        </FilterRow>
+
+        <FilterRow label="Active">
+          <StopSlider
+            stops={ACTIVE_STOPS}
+            value={search.active}
             patch={(next) => ({ active: next })}
           />
-          <SwitchFilter
-            label="2000+ hours played"
-            checked={search.minutes > 0}
-            patch={(next) => ({ minutes: next ? 120_000 : 0 })}
-          />
+          <span className="text-[11px] text-muted-foreground">played in the last 2 weeks</span>
         </FilterRow>
 
         <FilterRow label="Search">
@@ -310,63 +413,68 @@ function UsagePage() {
         </FilterRow>
       </div>
 
-      {items.length === 0 ? (
+      {items.length === 0 && !query.isFetching ? (
         <p className="text-muted-foreground">
           No data yet for this filter combination — the crawler is warming up.
         </p>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead className="w-10 text-right">#</TableHead>
-              <TableHead className="w-9" />
-              <TableHead>Item</TableHead>
-              {search.class === -1 && <TableHead className="w-32">Classes</TableHead>}
-              {search.slot === -1 && <TableHead className="w-24">Slot</TableHead>}
-              <TableHead className="w-20 text-right">Players</TableHead>
-              <TableHead className="w-44 text-right">Usage</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.map((item, index) => {
-              let variants =
-                search.merge && item.reskinGroup !== null
-                  ? (variantsByGroup.get(item.reskinGroup) ?? [])
-                  : [];
-              // class views fold the pan family into the class's stock melee
-              if (search.merge && search.class !== -1 && STOCK_MELEES.has(item.defindex)) {
-                variants = [...variants, ...(variantsByGroup.get(PAN_GROUP) ?? [])];
-              }
-              // a lone variant that IS the parent row adds nothing
-              const expandable =
-                variants.length > 1 ||
-                (variants.length === 1 && variants[0]?.defindex !== item.defindex);
-              const isOpen = expandable && expanded.has(item.defindex);
-              return (
-                <ItemRows
-                  key={item.defindex}
-                  item={item}
-                  rank={index + 1}
-                  variants={variants}
-                  expandable={expandable}
-                  isOpen={isOpen}
-                  onToggle={() => toggleExpand(item.defindex)}
-                  showClasses={search.class === -1}
-                  showSlot={search.slot === -1}
-                />
-              );
-            })}
-          </TableBody>
-        </Table>
+        <div className="relative">
+          <Table className="table-fixed">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-10 text-right">#</TableHead>
+                <TableHead className="w-9" />
+                <TableHead>Item</TableHead>
+                {search.class === -1 && <TableHead className="w-27">Classes</TableHead>}
+                {search.slot === -1 && <TableHead className="w-22">Slot</TableHead>}
+                <TableHead className="w-18 text-right">Players</TableHead>
+                <TableHead className="w-38 text-right">Usage</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((item, index) => {
+                let variants =
+                  search.merge && item.reskinGroup !== null
+                    ? (variantsByGroup.get(item.reskinGroup) ?? [])
+                    : [];
+                // class views fold the pan family into the class's stock melee
+                if (search.merge && search.class !== -1 && STOCK_MELEES.has(item.defindex)) {
+                  variants = [...variants, ...(variantsByGroup.get(PAN_GROUP) ?? [])];
+                }
+                // a lone variant that IS the parent row adds nothing
+                const expandable =
+                  variants.length > 1 ||
+                  (variants.length === 1 && variants[0]?.defindex !== item.defindex);
+                const isOpen = expandable && expanded.has(item.defindex);
+                return (
+                  <ItemRows
+                    key={item.defindex}
+                    item={item}
+                    rank={index + 1}
+                    variants={variants}
+                    expandable={expandable}
+                    isOpen={isOpen}
+                    onToggle={() => toggleExpand(item.defindex)}
+                    showClasses={search.class === -1}
+                    showSlot={search.slot === -1}
+                  />
+                );
+              })}
+            </TableBody>
+          </Table>
+          {query.isPlaceholderData && (
+            <div className="absolute inset-0 z-10 flex items-start justify-center rounded-md bg-background/60 pt-24 backdrop-blur-[1px]">
+              <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm text-muted-foreground shadow-sm">
+                <span className="size-4 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-foreground" />
+                Updating…
+              </div>
+            </div>
+          )}
+        </div>
       )}
-      {!showAll && allItems.length > items.length && (
-        <button
-          type="button"
-          onClick={() => setShowAll(true)}
-          className="w-full rounded-md border py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          Show all {allItems.length.toLocaleString()} items
-        </button>
+      <div ref={sentinelRef} className="h-px" />
+      {isFetchingNextPage && (
+        <p className="py-2 text-center font-mono text-xs text-muted-foreground">loading more…</p>
       )}
     </div>
   );
@@ -443,7 +551,7 @@ function ItemRows({
         <TableCell className="py-0.5">
           {item.imageUrl && <img src={item.imageUrl} alt="" className="h-7 w-7" loading="lazy" />}
         </TableCell>
-        <TableCell className="py-1">
+        <TableCell className="overflow-hidden py-1 text-ellipsis">
           <ItemName item={item} />
           {expandable && (
             <span className="ml-1.5 font-mono text-[11px] text-primary/70">
@@ -458,7 +566,7 @@ function ItemRows({
           </TableCell>
         )}
         {showSlot && (
-          <TableCell className="py-1 text-xs text-muted-foreground">
+          <TableCell className="overflow-hidden py-1 text-xs text-ellipsis text-muted-foreground">
             {item.slotName ? (SLOT_DISPLAY[item.slotName] ?? item.slotName) : ""}
           </TableCell>
         )}
@@ -478,7 +586,10 @@ function ItemRows({
                 <img src={v.imageUrl} alt="" className="ml-auto h-5 w-5" loading="lazy" />
               )}
             </TableCell>
-            <TableCell className="py-0.5 pl-6" colSpan={1 + extraCols}>
+            <TableCell
+              className="overflow-hidden py-0.5 pl-6 text-ellipsis"
+              colSpan={1 + extraCols}
+            >
               <ItemName item={v} dim />
               {variantKind(v) && (
                 <span className="ml-2 rounded bg-secondary/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
@@ -501,14 +612,16 @@ function ItemRows({
 function UsageBar({ usage, dim }: { usage: number; dim?: boolean }) {
   return (
     <div className="flex items-center justify-end gap-2">
-      <div className={`h-1.5 overflow-hidden rounded-full bg-secondary ${dim ? "w-20" : "w-24"}`}>
+      <div
+        className={`h-1.5 shrink-0 overflow-hidden rounded-full bg-secondary ${dim ? "w-16" : "w-20"}`}
+      >
         <div
           className={`h-full rounded-full ${dim ? "bg-chart-2/60" : "bg-primary"}`}
           style={{ width: `${Math.min(usage * 100, 100)}%` }}
         />
       </div>
       <span
-        className={`w-14 text-right font-mono tabular-nums ${dim ? "text-xs text-muted-foreground" : "text-sm"}`}
+        className={`w-14 shrink-0 text-right font-mono tabular-nums ${dim ? "text-xs text-muted-foreground" : "text-sm"}`}
       >
         {(usage * 100).toFixed(1)}%
       </span>

@@ -56,8 +56,9 @@ export const CLASS_NAMES: Record<number, string> = {
   9: "Engineer",
 };
 
-export const MIN_RATE_HOURS = 50;
-export const MIN_RATE_SECONDS = MIN_RATE_HOURS * 3600;
+/** playtime-on-scope thresholds rate boards are precomputed at */
+export const RATE_THRESHOLD_HOURS = [10, 50, 150, 500] as const;
+export const DEFAULT_RATE_HOURS = 50;
 
 export type BoardScope = "overall" | number;
 export type BoardKind = "total" | "per_hour";
@@ -69,10 +70,16 @@ export interface BoardDef {
   scope: BoardScope;
   kind: BoardKind;
   label: string;
+  /** scope-free label for pickers that filter by class separately */
+  shortLabel: string;
   /** short label for the value column header */
   valueLabel: string;
   /** display precision for values */
   decimals: number;
+  /** rate boards only: min playtime_seconds on the scope to qualify */
+  minRateSeconds?: number;
+  /** rate boards only: minRateSeconds in hours (key suffix / labels) */
+  minRateHours?: number;
 }
 
 function capitalize(s: string): string {
@@ -93,6 +100,7 @@ function makeBoards(): BoardDef[] {
       scope: "overall",
       kind: "total",
       label: "Most TF2 hours",
+      shortLabel: "Most TF2 hours",
       valueLabel: "Hours",
       decimals: 0,
     },
@@ -107,19 +115,24 @@ function makeBoards(): BoardDef[] {
         scope,
         kind: "total",
         label: `Most ${METRIC_LABELS[metric]} (${where})`,
+        shortLabel: `Most ${METRIC_LABELS[metric]}`,
         valueLabel: capitalize(METRIC_LABELS[metric]),
         decimals: 0,
       });
       // playtime per hour is identically 1 — skip it
-      if (metric !== "playtime") {
+      if (metric === "playtime") continue;
+      for (const hours of RATE_THRESHOLD_HOURS) {
         boards.push({
-          key: `${metric}:${scope}:per_hour`,
+          key: `${metric}:${scope}:per_hour:${hours}h`,
           metric,
           scope,
           kind: "per_hour",
-          label: `${capitalize(METRIC_LABELS[metric])} per hour (${where}, ${MIN_RATE_HOURS}h+)`,
+          label: `${capitalize(METRIC_LABELS[metric])} per hour (${where}, ${hours}h+)`,
+          shortLabel: `${capitalize(METRIC_LABELS[metric])} per hour`,
           valueLabel: `${capitalize(METRIC_LABELS[metric])} / hr`,
           decimals: rateDecimals(metric),
+          minRateSeconds: hours * 3600,
+          minRateHours: hours,
         });
       }
     }
@@ -151,6 +164,7 @@ export function boardSelectSql(def: BoardDef, limit: number): string {
   // playtime totals are reported in hours
   const div = def.metric === "playtime" ? " / 3600.0" : "";
   const from = "from player_class_stats c join players p using (steamid)";
+  const minSeconds = def.minRateSeconds ?? 0;
   if (def.scope === "overall") {
     if (def.kind === "total") {
       return `
@@ -166,7 +180,7 @@ export function boardSelectSql(def: BoardDef, limit: number): string {
       ${from}
       where ${POP}
       group by c.steamid
-      having sum(c.playtime_seconds) >= ${MIN_RATE_SECONDS}
+      having sum(c.playtime_seconds) >= ${minSeconds}
       order by value desc, c.steamid
       limit ${limit}`;
   }
@@ -181,16 +195,45 @@ export function boardSelectSql(def: BoardDef, limit: number): string {
   return `
     select c.steamid, (c.${col} * 3600.0 / c.playtime_seconds)::real as value
     ${from}
-    where c.class_num = ${def.scope} and c.playtime_seconds >= ${MIN_RATE_SECONDS} and ${POP}
+    where c.class_num = ${def.scope} and c.playtime_seconds >= ${minSeconds} and ${POP}
     order by value desc, c.steamid
     limit ${limit}`;
 }
 
 /**
+ * Participant count for one board (percentile denominator). Identical for all
+ * metrics sharing a (scope, kind, threshold) cell, so callers can cache on the
+ * returned SQL text.
+ */
+export function boardCountSql(def: BoardDef): string {
+  if (def.metric === "hours") {
+    return `
+      select count(*)::int as n from players p
+      where p.tf2_minutes is not null and ${POP}`;
+  }
+  const from = "from player_class_stats c join players p using (steamid)";
+  const minSeconds = def.minRateSeconds ?? 0;
+  if (def.scope === "overall") {
+    if (def.kind === "total") {
+      return `select count(distinct c.steamid)::int as n ${from} where ${POP}`;
+    }
+    return `
+      select count(*)::int as n from (
+        select c.steamid ${from} where ${POP}
+        group by c.steamid
+        having sum(c.playtime_seconds) >= ${minSeconds}
+      ) q`;
+  }
+  const rate = def.kind === "per_hour" ? ` and c.playtime_seconds >= ${minSeconds}` : "";
+  return `select count(*)::int as n ${from} where c.class_num = ${def.scope}${rate} and ${POP}`;
+}
+
+/**
  * One query over player_class_stats producing the player's rank, participant
- * count and value on every class-stat board (rate boards restricted to the
- * 50h threshold before ranking). scope 0 = overall. The hours board needs a
- * second, players-only query — see fetchPlayerRanks in the web app.
+ * count and value on every class-stat board (rate boards restricted to their
+ * playtime threshold before ranking; kind carries the ":<N>h" suffix so
+ * "metric:scope:kind" is the board key). scope 0 = overall. The hours board
+ * needs a second, players-only query — see fetchPlayerRanks in the web app.
  */
 export function playerRanksSql(): string {
   const aggs = METRICS.map((m) => `sum(${METRIC_COLUMNS[m]}) as ${m}`).join(", ");
@@ -199,9 +242,10 @@ export function playerRanksSql(): string {
   for (const m of METRICS) {
     const total = m === "playtime" ? "s.playtime / 3600.0" : `s.${m}::real`;
     entries.push(`('${m}', 'total', ${total})`);
-    if (m !== "playtime") {
+    if (m === "playtime") continue;
+    for (const hours of RATE_THRESHOLD_HOURS) {
       entries.push(
-        `('${m}', 'per_hour', case when s.playtime >= ${MIN_RATE_SECONDS} then s.${m} * 3600.0 / s.playtime end)`,
+        `('${m}', 'per_hour:${hours}h', case when s.playtime >= ${hours * 3600} then s.${m} * 3600.0 / s.playtime end)`,
       );
     }
   }

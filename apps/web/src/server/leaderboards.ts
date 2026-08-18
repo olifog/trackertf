@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import {
   BOARD_MAP,
   type BoardDef,
+  boardCountSql,
   boardSelectSql,
   hoursRankSql,
   playerRanksSql,
@@ -19,13 +20,19 @@ export interface LeaderRow {
   value: number;
 }
 
+export interface LeaderboardResponse {
+  rows: LeaderRow[];
+  /** board population size (percentile denominator); null before first precompute */
+  participants: number | null;
+}
+
 const boardKeySchema = z
   .string()
   .refine((key): key is string => BOARD_MAP.has(key), "unknown board");
 
 export const fetchLeaderboard = createServerFn({ method: "GET" })
   .validator(z.object({ board: boardKeySchema }))
-  .handler(async ({ data }): Promise<LeaderRow[]> => {
+  .handler(async ({ data }): Promise<LeaderboardResponse> => {
     const def = BOARD_MAP.get(data.board) as BoardDef;
     const db = getDb();
     let rows = (await db.execute(sql`
@@ -35,22 +42,36 @@ export const fetchLeaderboard = createServerFn({ method: "GET" })
       where e.board_key = ${def.key}
       order by e.rank
     `)) as unknown as Record<string, unknown>[];
+    let participants: number | null = null;
     if (rows.length === 0) {
       // analyser hasn't populated leaderboard_entries yet — compute live
-      rows = (await db.execute(sql`
-        select row_number() over (order by t.value desc, t.steamid)::int as rank,
-          t.steamid, t.value, p.personaname, p.avatar_hash
-        from (${sql.raw(boardSelectSql(def, 100))}) t
-        join players p using (steamid)
-      `)) as unknown as Record<string, unknown>[];
+      const [live, counts] = await Promise.all([
+        db.execute(sql`
+          select row_number() over (order by t.value desc, t.steamid)::int as rank,
+            t.steamid, t.value, p.personaname, p.avatar_hash
+          from (${sql.raw(boardSelectSql(def, 100))}) t
+          join players p using (steamid)
+        `) as unknown as Promise<Record<string, unknown>[]>,
+        db.execute(sql.raw(boardCountSql(def))) as unknown as Promise<{ n: number }[]>,
+      ]);
+      rows = live;
+      participants = counts[0]?.n ?? null;
+    } else {
+      const meta = (await db.execute(sql`
+        select participants from leaderboard_meta where board_key = ${def.key}
+      `)) as unknown as { participants: number }[];
+      participants = meta[0]?.participants ?? null;
     }
-    return rows.map((r) => ({
-      rank: r["rank"] as number,
-      steamid: r["steamid"] as string,
-      personaname: r["personaname"] as string | null,
-      avatarHash: r["avatar_hash"] as string | null,
-      value: r["value"] as number,
-    }));
+    return {
+      rows: rows.map((r) => ({
+        rank: r["rank"] as number,
+        steamid: r["steamid"] as string,
+        personaname: r["personaname"] as string | null,
+        avatarHash: r["avatar_hash"] as string | null,
+        value: r["value"] as number,
+      })),
+      participants,
+    };
   });
 
 export const leaderboardQueryOptions = (board: string) =>

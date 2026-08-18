@@ -1,22 +1,24 @@
 /**
  * Recomputes usage_stats from equipped_items for every filter combination:
- * 4 populations (active × experienced) × all class/slot rollups × merge modes.
- * Replaces styletf's 400-combo Mongo cartesian product with 4 SQL passes.
+ * 20 populations (total-hours × 2-week-activity buckets) × all class/slot
+ * rollups × merge modes. Replaces styletf's 400-combo Mongo cartesian product
+ * with one SQL pass per population.
  */
 import { createDbFromEnv } from "@trackertf/db";
-import { BOARDS, boardSelectSql } from "@trackertf/db/boards";
+import { BOARDS, boardCountSql, boardSelectSql } from "@trackertf/db/boards";
 import { sql } from "drizzle-orm";
 
 const db = createDbFromEnv();
 const INTERVAL_MS = 15 * 60_000;
-const EXPERIENCED_MINUTES = 120_000;
 
-const POPULATIONS = [
-  { active: false, minutes: 0 },
-  { active: true, minutes: 0 },
-  { active: false, minutes: EXPERIENCED_MINUTES },
-  { active: true, minutes: EXPERIENCED_MINUTES },
-] as const;
+/** min lifetime minutes: everyone / 500h / 1000h / 2000h / 4000h */
+const HOURS_BUCKETS = [0, 30_000, 60_000, 120_000, 240_000] as const;
+/** min minutes played in the last 2 weeks: everyone / played / 5h / 15h */
+const ACTIVE_2WK_BUCKETS = [0, 1, 300, 900] as const;
+
+const POPULATIONS = HOURS_BUCKETS.flatMap((minutes) =>
+  ACTIVE_2WK_BUCKETS.map((active2wk) => ({ minutes, active2wk })),
+);
 
 async function recompute(): Promise<void> {
   await db.transaction(async (tx) => {
@@ -26,7 +28,7 @@ async function recompute(): Promise<void> {
         with pop as (
           select p.steamid from players p
           where p.items_status = 'ok'
-            and (${pop.active} = false or coalesce(p.tf2_minutes_2wk, 0) > 0)
+            and coalesce(p.tf2_minutes_2wk, 0) >= ${pop.active2wk}
             and coalesce(p.tf2_minutes, 0) > ${pop.minutes}
         ),
         total as (select count(*)::int n from pop),
@@ -97,10 +99,10 @@ async function recompute(): Promise<void> {
           group by 1, 2
         )
         insert into usage_stats
-          (defindex, class_num, slot, active_only, minutes_threshold, merge_reskins,
+          (defindex, class_num, slot, active_minutes_2wk, minutes_threshold, merge_reskins,
            usage, count, sample_size, computed_at)
         select
-          r.defindex, r.class_num, r.slot, ${pop.active}, ${pop.minutes}, r.merged,
+          r.defindex, r.class_num, r.slot, ${pop.active2wk}, ${pop.minutes}, r.merged,
           -- class=Any divides by per-class equip opportunities (old styletf
           -- semantics); slot-specific rows use slot-specific class counts
           r.c::real / (t.n * case
@@ -155,15 +157,33 @@ async function recomputeWeaponStats(): Promise<void> {
   });
 }
 
-/** top-100 per board across the whole metric × scope × kind grid (boards.ts) */
+/**
+ * top-100 per board across the whole metric × scope × kind × threshold grid
+ * (boards.ts), plus per-board participant counts (percentile denominators)
+ * into leaderboard_meta. Counts are identical for every metric in a
+ * (scope, kind, threshold) cell, so they're cached on the count SQL text.
+ */
 async function recomputeLeaderboards(): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.execute(sql`delete from leaderboard_entries`);
+    await tx.execute(sql`delete from leaderboard_meta`);
+    const countCache = new Map<string, number>();
     for (const board of BOARDS) {
       await tx.execute(sql`
         insert into leaderboard_entries (board_key, rank, steamid, value)
         select ${board.key}, row_number() over (order by t.value desc, t.steamid), t.steamid, t.value
         from (${sql.raw(boardSelectSql(board, 100))}) t
+      `);
+      const countSql = boardCountSql(board);
+      let participants = countCache.get(countSql);
+      if (participants === undefined) {
+        const rows = (await tx.execute(sql.raw(countSql))) as unknown as { n: number }[];
+        participants = rows[0]?.n ?? 0;
+        countCache.set(countSql, participants);
+      }
+      await tx.execute(sql`
+        insert into leaderboard_meta (board_key, participants)
+        values (${board.key}, ${participants})
       `);
     }
   });
