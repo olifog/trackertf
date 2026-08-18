@@ -193,6 +193,22 @@ export const weaponClassStats = pgTable(
   (t) => [primaryKey({ columns: [t.defindex, t.classNum] })],
 );
 
+/**
+ * Precomputed top-100 per leaderboard board (see boards.ts for the key grid),
+ * rewritten by the analyser every 15 minutes.
+ * NOTE: web_ro needs SELECT on leaderboard_entries (deployer handles grants).
+ */
+export const leaderboardEntries = pgTable(
+  "leaderboard_entries",
+  {
+    boardKey: text().notNull(),
+    rank: integer().notNull(),
+    steamid: text().notNull(),
+    value: real().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.boardKey, t.rank] })],
+);
+
 export const crawlFrontier = pgTable(
   "crawl_frontier",
   {

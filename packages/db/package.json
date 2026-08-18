@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./schema": "./src/schema.ts"
+    "./schema": "./src/schema.ts",
+    "./boards": "./src/boards.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit -p tsconfig.json",

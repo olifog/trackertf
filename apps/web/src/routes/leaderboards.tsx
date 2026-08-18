@@ -1,5 +1,5 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
+import { createFileRoute, Link, stripSearchParams, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 import {
   Table,
@@ -9,11 +9,16 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { BOARD_MAP, BOARDS, type BoardDef, MIN_RATE_HOURS } from "@trackertf/db/boards";
 import { avatarUrl, CLASS_NAMES } from "#/lib/tf2";
-import { BOARD_LABELS, type BoardKey, leaderboardQueryOptions } from "#/server/leaderboards";
+import { leaderboardQueryOptions } from "#/server/leaderboards";
 
 const searchSchema = z.object({
-  board: z.enum(["hours", "kills", "killsPerHour", "pointsPerMin"]).catch("hours").default("hours"),
+  board: z
+    .string()
+    .refine((key) => BOARD_MAP.has(key))
+    .catch("hours")
+    .default("hours"),
 });
 
 export const Route = createFileRoute("/leaderboards")({
@@ -25,34 +30,55 @@ export const Route = createFileRoute("/leaderboards")({
   component: LeaderboardsPage,
 });
 
+/** boards grouped by scope for the <select>: Overall first, then each class */
+const BOARD_GROUPS: { label: string; boards: BoardDef[] }[] = [
+  { label: "Overall", boards: BOARDS.filter((b) => b.scope === "overall") },
+  ...Object.entries(CLASS_NAMES).map(([num, name]) => ({
+    label: name,
+    boards: BOARDS.filter((b) => b.scope === Number(num)),
+  })),
+];
+
+function formatValue(value: number, decimals: number): string {
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
 function LeaderboardsPage() {
   const { board } = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
   const { data: rows } = useSuspenseQuery(leaderboardQueryOptions(board));
+  const def = BOARD_MAP.get(board) as BoardDef;
+  const perClass = def.scope !== "overall";
 
   return (
     <div className="space-y-5">
       <h1 className="font-heading text-2xl font-bold">Leaderboards</h1>
 
-      <div className="inline-flex overflow-hidden rounded-md border divide-x divide-border">
-        {(Object.keys(BOARD_LABELS) as BoardKey[]).map((key) => (
-          <Link
-            key={key}
-            from={Route.fullPath}
-            search={{ board: key }}
-            className={`flex h-8 items-center px-3 text-[13px] leading-none transition-colors ${
-              board === key
-                ? "bg-primary font-medium text-primary-foreground"
-                : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
-            }`}
-          >
-            {BOARD_LABELS[key]}
-          </Link>
-        ))}
-      </div>
+      <label className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-muted-foreground">Board</span>
+        <select
+          value={board}
+          onChange={(e) => void navigate({ search: { board: e.target.value } })}
+          className="h-8 max-w-full rounded-md border bg-secondary/40 px-2 text-[13px] text-secondary-foreground"
+        >
+          {BOARD_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.boards.map((b) => (
+                <option key={b.key} value={b.key}>
+                  {b.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </label>
 
       <p className="text-xs text-muted-foreground">
-        Among crawled players with public profiles, no VAC bans. Rate boards require 50+ hours on
-        the class. The sample skews connected/veteran players — see{" "}
+        Among crawled players with public profiles, no VAC bans. Rate boards require{" "}
+        {MIN_RATE_HOURS}+ hours on the scope. The sample skews connected/veteran players — see{" "}
         <a href="/methodology" className="underline">
           methodology
         </a>
@@ -65,17 +91,15 @@ function LeaderboardsPage() {
             <TableHead className="w-10 text-right">#</TableHead>
             <TableHead className="w-9" />
             <TableHead>Player</TableHead>
-            {(board === "killsPerHour" || board === "pointsPerMin") && (
-              <TableHead className="w-24">Class</TableHead>
-            )}
-            <TableHead className="w-32 text-right">{BOARD_LABELS[board]}</TableHead>
+            {perClass && <TableHead className="w-24">Class</TableHead>}
+            <TableHead className="w-40 text-right">{def.valueLabel}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row, i) => (
+          {rows.map((row) => (
             <TableRow key={row.steamid} className="h-9">
               <TableCell className="py-1 text-right font-mono text-muted-foreground">
-                {i + 1}
+                {row.rank}
               </TableCell>
               <TableCell className="py-0.5">
                 {avatarUrl(row.avatarHash) && (
@@ -96,22 +120,22 @@ function LeaderboardsPage() {
                   {row.personaname ?? row.steamid}
                 </Link>
               </TableCell>
-              {(board === "killsPerHour" || board === "pointsPerMin") && (
+              {perClass && (
                 <TableCell className="py-1 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1.5">
-                    {row.classNum !== null && CLASS_NAMES[row.classNum] && (
+                    {CLASS_NAMES[def.scope as number] && (
                       <img
-                        src={`/${CLASS_NAMES[row.classNum]}.svg`}
+                        src={`/${CLASS_NAMES[def.scope as number]}.svg`}
                         alt=""
                         className="h-3.5 w-3.5"
                       />
                     )}
-                    {row.classNum !== null ? CLASS_NAMES[row.classNum] : ""}
+                    {CLASS_NAMES[def.scope as number]}
                   </span>
                 </TableCell>
               )}
               <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
-                {row.value.toLocaleString()}
+                {formatValue(row.value, def.decimals)}
               </TableCell>
             </TableRow>
           ))}
