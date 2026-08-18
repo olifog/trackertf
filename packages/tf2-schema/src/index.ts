@@ -11,6 +11,13 @@ import { fetchLocalization, fetchPaintkitNames, localizeName } from "./localizat
 
 export { computeClassSlots, computeReskinGroups, fetchItemsGame } from "./items-game.ts";
 export { fetchLocalization, localizeName } from "./localization.ts";
+export {
+  HALE_OWN_KILLS,
+  STRANGE_RANKS,
+  type StrangeRank,
+  haleOwnPct,
+  strangeRank,
+} from "./strange.ts";
 export { parseVdf } from "./vdf.ts";
 
 /** Web API class numbering (class number - 1 indexes stock loadouts). */

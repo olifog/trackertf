@@ -29,7 +29,7 @@ const ENRICHED_EQUIPPED = sql`
                    = (select coalesce(reskin_group, 264) from item_schema where defindex = 264)
            then ${PAN_REMAP}
            else coalesce(s.reskin_group, e.defindex) end as cgid,
-         e.quality,
+         e.quality, e.strange_kills,
          coalesce(p.tf2_minutes, 0) as lifetime_min,
          coalesce(p.tf2_minutes_2wk, 0) as active_2wk_min
   from equipped_items e
@@ -59,8 +59,6 @@ async function insertRows(
 
 async function syncEquipped(): Promise<void> {
   const rows = (await db.execute(ENRICHED_EQUIPPED)) as unknown as Record<string, unknown>[];
-  // strange_kills is 0 until the kill_eater backfill lands (attributes were
-  // stripped from stored payloads); the column is here so no reschema is needed.
   const equipped = rows.map((r) => ({
     steamid: r["steamid"],
     class_num: r["class_num"],
@@ -69,7 +67,7 @@ async function syncEquipped(): Promise<void> {
     gid: r["gid"],
     cgid: r["cgid"],
     quality: r["quality"],
-    strange_kills: 0,
+    strange_kills: r["strange_kills"],
     lifetime_min: r["lifetime_min"],
     active_2wk_min: r["active_2wk_min"],
   }));

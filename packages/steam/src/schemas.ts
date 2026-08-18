@@ -31,6 +31,12 @@ export const equipInfoSchema = z.object({
   slot: z.number(),
 });
 
+export const itemAttributeSchema = z.object({
+  defindex: z.number(),
+  value: z.number().optional(),
+  float_value: z.number().optional(),
+});
+
 export const backpackItemSchema = z.object({
   id: z.number(),
   original_id: z.number().optional(),
@@ -39,6 +45,7 @@ export const backpackItemSchema = z.object({
   quality: z.number().optional(),
   quantity: z.number().optional(),
   equipped: z.array(equipInfoSchema).optional(),
+  attributes: z.array(itemAttributeSchema).optional(),
 });
 export type BackpackItem = z.infer<typeof backpackItemSchema>;
 

@@ -35,11 +35,26 @@ function semanticSlot(classNum: number, slot: number): number {
 /** Unique — the default quality; stock backfill rows are always Unique. */
 const QUALITY_UNIQUE = 6;
 
+/** Primary Strange score attribute; its integer count lives in `value`. */
+const KILL_EATER_DEFINDEX = 214;
+
+/**
+ * Strange kill count for an item = the attr-214 value (integer count in
+ * `value`, falling back to `float_value`). 0 if the item has no such attribute
+ * (i.e. it isn't Strange, or attributes were never captured/stored).
+ */
+function killEaterCount(item: BackpackItem): number {
+  const attr = item.attributes?.find((a) => a.defindex === KILL_EATER_DEFINDEX);
+  if (!attr) return 0;
+  return attr.value ?? attr.float_value ?? 0;
+}
+
 export interface EquippedRow {
   defindex: number;
   classNum: number;
   slot: number;
   quality: number;
+  strangeKills: number;
 }
 
 /**
@@ -63,6 +78,7 @@ export function parseEquipped(items: readonly BackpackItem[]): EquippedRow[] {
         classNum: equip.class,
         slot: semanticSlot(equip.class, slot),
         quality: item.quality ?? QUALITY_UNIQUE,
+        strangeKills: killEaterCount(item),
       });
     }
   }
@@ -79,6 +95,7 @@ export function parseEquipped(items: readonly BackpackItem[]): EquippedRow[] {
           classNum,
           slot: semanticSlot(classNum, slot),
           quality: QUALITY_UNIQUE,
+          strangeKills: 0,
         });
       }
     }
