@@ -1,5 +1,6 @@
 import {
   bigint,
+  bigserial,
   boolean,
   index,
   integer,
@@ -239,6 +240,56 @@ export const serverSnapshots = pgTable(
     primaryKey({ columns: [t.scannedAt, t.map, t.region, t.official] }),
     index("server_snapshots_scanned_at_idx").on(t.scannedAt),
   ],
+);
+
+/**
+ * One continuous run of sampler observations of a single Valve casual server
+ * (identified by its GetServerList steamid) on one map. A map change or the
+ * end of a sampling cycle closes the segment. Written by
+ * apps/crawler/src/sampler.ts.
+ */
+export const matchSegments = pgTable(
+  "match_segments",
+  {
+    id: bigserial({ mode: "number" }).primaryKey(),
+    serverSteamid: text().notNull(),
+    map: text().notNull(),
+    /** Valve region code from GetServerList (255 = unknown/SDR) */
+    region: smallint().notNull(),
+    startedAt: timestamp({ withTimezone: true }).notNull(),
+    endedAt: timestamp({ withTimezone: true }).notNull(),
+    /** number of successful player-query rounds folded into this segment */
+    observations: smallint().notNull(),
+  },
+  (t) => [index("match_segments_started_at_idx").on(t.startedAt)],
+);
+
+/**
+ * Per-player-name score trajectory endpoints within a match segment. Only raw
+ * endpoints are stored — observed points/hour is derived at query time as
+ * (last_score - first_score) / (last_seen - first_seen).
+ *
+ * `name` is the raw in-game name (unicode preserved, trimmed to 64 chars); it
+ * later joins probabilistically to players.personaname + stat-delta windows —
+ * that fusion is intentionally NOT done here.
+ */
+export const matchParticipants = pgTable(
+  "match_participants",
+  {
+    segmentId: bigint({ mode: "number" })
+      .notNull()
+      .references(() => matchSegments.id),
+    name: text().notNull(),
+    firstSeen: timestamp({ withTimezone: true }).notNull(),
+    lastSeen: timestamp({ withTimezone: true }).notNull(),
+    firstScore: integer().notNull(),
+    lastScore: integer().notNull(),
+    maxScore: integer().notNull(),
+    firstTimePlayed: real().notNull(),
+    lastTimePlayed: real().notNull(),
+    observations: smallint().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.segmentId, t.name] })],
 );
 
 /**
