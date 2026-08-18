@@ -92,7 +92,10 @@ function RootDocument({ children }: { children: React.ReactNode }) {
               <span className="font-heading text-lg font-bold text-primary">tracker.tf</span>
             </Link>
             <NavLink to="/usage">Usage</NavLink>
+            <NavLink to="/combos">Combos</NavLink>
+            <NavLink to="/performance">Performance</NavLink>
             <NavLink to="/leaderboards">Leaderboards</NavLink>
+            <NavLink to="/servers">Servers</NavLink>
             <NavLink to="/health">Health</NavLink>
             <CommandPalette />
             <a

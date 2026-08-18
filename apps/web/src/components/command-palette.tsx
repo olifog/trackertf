@@ -3,6 +3,10 @@ import {
   ActivityIcon,
   ArrowRightIcon,
   ChartBarIcon,
+  GaugeIcon,
+  LayersIcon,
+  RadioIcon,
+  ServerIcon,
   SwordsIcon,
   TrophyIcon,
   UserIcon,
@@ -23,7 +27,11 @@ import { type GlobalSearchResponse, globalSearch } from "#/server/search";
 
 const PAGES = [
   { label: "Usage", to: "/usage", icon: ChartBarIcon },
+  { label: "Combos", to: "/combos", icon: LayersIcon },
+  { label: "Performance", to: "/performance", icon: GaugeIcon },
   { label: "Leaderboards", to: "/leaderboards", icon: TrophyIcon },
+  { label: "Servers", to: "/servers", icon: ServerIcon },
+  { label: "Matches", to: "/matches", icon: RadioIcon },
   { label: "Health", to: "/health", icon: ActivityIcon },
 ] as const;
 
