@@ -72,6 +72,11 @@ const COSMETIC_ATTRS = new Set(
     "vision opt in flags",
     "pyrovision only DISPLAY ONLY",
     "pyrovision opt in DISPLAY ONLY",
+    // pure death/visual effects (Invasion reskins: Shooting Star, C.A.P.P.E.R, Batsaber)
+    "ragdolls become ash",
+    "ragdolls plasma effect",
+    // Giger Counter's only diff from the Wrangler — changes the shield visual
+    "is giger counter",
   ].map((s) => s.toLowerCase()),
 );
 
@@ -83,6 +88,17 @@ const COSMETIC_ATTRS = new Set(
 const MANUAL_MERGES: ReadonlyMap<number, number> = new Map([
   [513, 18], // The Original → Rocket Launcher (centerfire projectile)
   [741, 21], // The Rainblower → Flame Thrower (pyrovision + armageddon taunt)
+  // lunchbox behavior is keyed by overloaded enum attrs ("lunchbox adds
+  // minicrits" etc.) whose values differ per reskin while gameplay is
+  // identical — cosmetic-izing them would over-merge (Steak vs Sandvich),
+  // so these community-consensus food reskins merge manually:
+  [433, 159], // Fishcake → Dalokohs Bar (maxhealth-bonus enum 7 vs 1, same effect)
+  [863, 42], // Robo-Sandvich → Sandvich (minicrits enum 3, same effect)
+  [1002, 42], // Festive Sandvich → Sandvich (minicrits enum 4, same effect)
+  // GRU reskin: differs only by "breadgloves properties" (visual) and a
+  // redundant "allowed in medieval mode" flag (melee is always allowed) —
+  // the medieval flag is real gameplay on other slots, so merge manually
+  [1100, 239], // The Bread Bite → Gloves of Running Urgently
 ]);
 
 /** Weapon-ish slots eligible for functional-group merging. Cosmetics/taunts
@@ -156,6 +172,37 @@ function gameplayAttrSignature(item: KV): string {
     }
   }
   return parts.toSorted().join("|");
+}
+
+/** Resolved view of one item for reskin diagnostics (validate-reskins script). */
+export interface ItemSummary {
+  defindex: number;
+  name: string | undefined;
+  itemClass: string | undefined;
+  slot: string | undefined;
+  classes: string[];
+  gameplayAttrs: string;
+}
+
+export function summarizeItem(itemsGame: KV, defindex: number): ItemSummary | undefined {
+  const items = asObj(itemsGame["items"]) ?? {};
+  const prefabs = asObj(itemsGame["prefabs"]) ?? {};
+  const raw = asObj(items[String(defindex)]);
+  if (!raw) return undefined;
+  const item = resolve(raw, prefabs, new Map());
+  const usedBy = asObj(item["used_by_classes"]);
+  return {
+    defindex,
+    name: asStr(item["name"]),
+    itemClass: asStr(item["item_class"])?.toLowerCase(),
+    slot: asStr(item["item_slot"])?.toLowerCase(),
+    classes: usedBy
+      ? Object.keys(usedBy)
+          .map((c) => c.toLowerCase())
+          .toSorted()
+      : ["all"],
+    gameplayAttrs: gameplayAttrSignature(item),
+  };
 }
 
 const SLOT_NUMS: Record<string, number> = { primary: 0, secondary: 1, melee: 2 };

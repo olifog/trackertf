@@ -6,7 +6,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsgo --noEmit -p tsconfig.json"
+    "typecheck": "tsgo --noEmit -p tsconfig.json",
+    "validate:reskins": "bun scripts/validate-reskins.ts"
   },
   "dependencies": {
     "@trackertf/db": "workspace:*",

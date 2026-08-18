@@ -32,12 +32,20 @@ export interface ItemPerf {
   avgDamagePerMin: number;
 }
 
+export interface VariantQuality {
+  defindex: number;
+  quality: number;
+  count: number;
+}
+
 export interface ItemResponse {
   item: ItemInfo;
   groupMembers: ItemInfo[];
   /** merged usage per class × population (slot=-1 rows) */
   usage: ItemUsageCell[];
   perf: ItemPerf[];
+  /** equip counts per (variant defindex, quality) across the group */
+  variantQualities: VariantQuality[];
 }
 
 const toInfo = (r: typeof schema.itemSchema.$inferSelect): ItemInfo => ({
@@ -68,6 +76,15 @@ export const fetchItem = createServerFn({ method: "GET" })
           .from(schema.itemSchema)
           .where(eq(schema.itemSchema.reskinGroup, item.reskinGroup))
       : [];
+
+    const groupDefindexes =
+      groupMembers.length > 0 ? groupMembers.map((m) => m.defindex) : [item.defindex];
+    const variantQualities = (await db.execute(sql`
+      select defindex, quality, count(*)::int as count
+      from equipped_items
+      where defindex in (${sql.join(groupDefindexes, sql`, `)})
+      group by defindex, quality
+    `)) as unknown as Record<string, unknown>[];
 
     const usage = (await db.execute(sql`
       select class_num, active_only, minutes_threshold, usage, count, sample_size
@@ -110,6 +127,11 @@ export const fetchItem = createServerFn({ method: "GET" })
         sampleSize: u["sample_size"] as number,
       })),
       perf,
+      variantQualities: variantQualities.map((v) => ({
+        defindex: v["defindex"] as number,
+        quality: v["quality"] as number,
+        count: v["count"] as number,
+      })),
     };
   });
 

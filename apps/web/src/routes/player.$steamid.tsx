@@ -1,5 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useState } from "react";
 import {
   Table,
   TableBody,
@@ -8,6 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { qualityColor, qualityName } from "#/lib/quality";
 import {
   avatarUrl,
   CLASS_NAMES,
@@ -18,13 +20,20 @@ import {
 } from "#/lib/tf2";
 import { BOARD_MAP } from "@trackertf/db/boards";
 import { playerRanksQueryOptions } from "#/server/leaderboards";
-import { playerQueryOptions } from "#/server/player";
+import {
+  type InventoryRow,
+  playerFriendsQueryOptions,
+  playerInventoryQueryOptions,
+  playerQueryOptions,
+} from "#/server/player";
 
 export const Route = createFileRoute("/player/$steamid")({
   loader: ({ context, params }) =>
     Promise.all([
       context.queryClient.ensureQueryData(playerQueryOptions(params.steamid)),
       context.queryClient.ensureQueryData(playerRanksQueryOptions(params.steamid)),
+      context.queryClient.ensureQueryData(playerInventoryQueryOptions(params.steamid)),
+      context.queryClient.ensureQueryData(playerFriendsQueryOptions(params.steamid)),
     ]),
   component: PlayerPage,
 });
@@ -35,6 +44,8 @@ function PlayerPage() {
   const { steamid } = Route.useParams();
   const { data: p } = useSuspenseQuery(playerQueryOptions(steamid));
   const { data: ranks } = useSuspenseQuery(playerRanksQueryOptions(steamid));
+  const { data: inventory } = useSuspenseQuery(playerInventoryQueryOptions(steamid));
+  const { data: friends } = useSuspenseQuery(playerFriendsQueryOptions(steamid));
   const bestRanks = ranks.slice(0, 20);
 
   if (!p.found) {
@@ -224,6 +235,8 @@ function PlayerPage() {
                           to="/item/$defindex"
                           params={{ defindex: e.defindex }}
                           className="hover:underline"
+                          style={{ color: qualityColor(e.quality) }}
+                          title={qualityName(e.quality)}
                         >
                           {itemDisplayName(e)}
                         </Link>
@@ -237,6 +250,98 @@ function PlayerPage() {
             ))}
           </div>
         </div>
+      )}
+
+      {inventory.length > 0 && <InventorySection rows={inventory} />}
+
+      {friends.hasData && friends.totalFriends > 0 && (
+        <div>
+          <h2 className="mb-2 font-heading text-lg font-semibold">Friends</h2>
+          {friends.friends.length > 0 && (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {friends.friends.map((f) => (
+                <Link
+                  key={f.steamid}
+                  to="/player/$steamid"
+                  params={{ steamid: f.steamid }}
+                  className="flex items-center gap-2 rounded-md border bg-card/50 px-2.5 py-1.5 transition-colors hover:bg-accent"
+                >
+                  {avatarUrl(f.avatarHash) && (
+                    <img
+                      src={avatarUrl(f.avatarHash) as string}
+                      alt=""
+                      className="h-7 w-7 rounded"
+                    />
+                  )}
+                  <span className="truncate text-[13px]">{f.personaname ?? f.steamid}</span>
+                  {f.friendSince > 0 && (
+                    <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/60">
+                      since {new Date(f.friendSince * 1000).getFullYear()}
+                    </span>
+                  )}
+                </Link>
+              ))}
+            </div>
+          )}
+          {friends.totalFriends > friends.friends.length && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {friends.friends.length > 0 ? "and " : ""}
+              {(friends.totalFriends - friends.friends.length).toLocaleString()} uncrawled friend
+              {friends.totalFriends - friends.friends.length === 1 ? "" : "s"}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const INVENTORY_PREVIEW = 96;
+
+function InventorySection({ rows }: { rows: InventoryRow[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? rows : rows.slice(0, INVENTORY_PREVIEW);
+  const totalItems = rows.reduce((a, r) => a + r.count, 0);
+
+  return (
+    <div>
+      <h2 className="mb-2 font-heading text-lg font-semibold">
+        Inventory{" "}
+        <span className="text-sm font-normal text-muted-foreground">
+          ({totalItems.toLocaleString()} items, {rows.length.toLocaleString()} distinct)
+        </span>
+      </h2>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(3rem,1fr))] gap-1.5">
+        {visible.map((r) => (
+          <Link
+            key={`${r.defindex}:${r.quality}`}
+            to="/item/$defindex"
+            params={{ defindex: r.defindex }}
+            title={`${qualityName(r.quality)} ${itemDisplayName(r)}${r.count > 1 ? ` ×${r.count}` : ""}`}
+            className="relative flex aspect-square items-center justify-center rounded border bg-card/50 p-1 transition-colors hover:bg-accent"
+            style={{ borderColor: qualityColor(r.quality) }}
+          >
+            {r.imageUrl ? (
+              <img src={r.imageUrl} alt="" loading="lazy" className="max-h-full max-w-full" />
+            ) : (
+              <span className="font-mono text-[9px] text-muted-foreground">#{r.defindex}</span>
+            )}
+            {r.count > 1 && (
+              <span className="absolute right-0.5 bottom-0.5 rounded bg-background/80 px-0.5 font-mono text-[9px] leading-tight text-muted-foreground">
+                ×{r.count}
+              </span>
+            )}
+          </Link>
+        ))}
+      </div>
+      {!showAll && rows.length > INVENTORY_PREVIEW && (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="mt-2 rounded-md border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent"
+        >
+          show all {rows.length.toLocaleString()}
+        </button>
       )}
     </div>
   );

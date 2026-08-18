@@ -32,10 +32,14 @@ function semanticSlot(classNum: number, slot: number): number {
   return slot;
 }
 
+/** Unique — the default quality; stock backfill rows are always Unique. */
+const QUALITY_UNIQUE = 6;
+
 export interface EquippedRow {
   defindex: number;
   classNum: number;
   slot: number;
+  quality: number;
 }
 
 /**
@@ -58,6 +62,7 @@ export function parseEquipped(items: readonly BackpackItem[]): EquippedRow[] {
         defindex: item.defindex,
         classNum: equip.class,
         slot: semanticSlot(equip.class, slot),
+        quality: item.quality ?? QUALITY_UNIQUE,
       });
     }
   }
@@ -69,7 +74,12 @@ export function parseEquipped(items: readonly BackpackItem[]): EquippedRow[] {
       const defindex = stock[slot];
       if (defindex === undefined || defindex === -1) continue;
       if (!physicalOccupied.has(`${classNum}:${slot}`)) {
-        out.push({ defindex, classNum, slot: semanticSlot(classNum, slot) });
+        out.push({
+          defindex,
+          classNum,
+          slot: semanticSlot(classNum, slot),
+          quality: QUALITY_UNIQUE,
+        });
       }
     }
   }

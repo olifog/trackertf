@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { qualityColor, qualityName, qualityRank } from "#/lib/quality";
 import { CLASS_NAMES, itemDisplayName } from "#/lib/tf2";
 import { itemQueryOptions } from "#/server/item";
 
@@ -27,7 +28,17 @@ function ItemPage() {
   const { defindex } = Route.useParams();
   const { data } = useSuspenseQuery(itemQueryOptions(defindex));
   if (!data) return null;
-  const { item, groupMembers, usage, perf } = data;
+  const { item, groupMembers, usage, perf, variantQualities } = data;
+
+  const qualitiesByVariant = new Map<number, { quality: number; count: number }[]>();
+  for (const v of variantQualities) {
+    const list = qualitiesByVariant.get(v.defindex) ?? [];
+    list.push({ quality: v.quality, count: v.count });
+    qualitiesByVariant.set(v.defindex, list);
+  }
+  for (const list of qualitiesByVariant.values()) {
+    list.sort((a, b) => qualityRank(a.quality) - qualityRank(b.quality));
+  }
 
   const populations = [
     { label: "All players", active: false, minutes: 0 },
@@ -181,20 +192,38 @@ function ItemPage() {
             </span>
           </h2>
           <div className="flex flex-wrap gap-2">
-            {groupMembers.map((m) => (
-              <Link
-                key={m.defindex}
-                to="/item/$defindex"
-                params={{ defindex: m.defindex }}
-                className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-[13px] transition-colors hover:bg-accent ${m.defindex === item.defindex ? "border-primary" : ""}`}
-              >
-                {m.imageUrl && <img src={m.imageUrl} alt="" className="h-5 w-5" />}
-                {itemDisplayName(m)}
-                <span className="font-mono text-[10px] text-muted-foreground/60">
-                  #{m.defindex}
-                </span>
-              </Link>
-            ))}
+            {groupMembers.map((m) => {
+              const quals = qualitiesByVariant.get(m.defindex);
+              return (
+                <Link
+                  key={m.defindex}
+                  to="/item/$defindex"
+                  params={{ defindex: m.defindex }}
+                  className={`flex flex-col gap-0.5 rounded-md border px-2.5 py-1.5 transition-colors hover:bg-accent ${m.defindex === item.defindex ? "border-primary" : ""}`}
+                >
+                  <span className="flex items-center gap-2 text-[13px]">
+                    {m.imageUrl && <img src={m.imageUrl} alt="" className="h-5 w-5" />}
+                    {itemDisplayName(m)}
+                    <span className="font-mono text-[10px] text-muted-foreground/60">
+                      #{m.defindex}
+                    </span>
+                  </span>
+                  {quals && quals.length > 0 && (
+                    <span className="flex flex-wrap gap-x-1.5 font-mono text-[10px]">
+                      {quals.map((q, i) => (
+                        <span key={q.quality} className="text-muted-foreground/60">
+                          {i > 0 && <span className="mr-1.5">·</span>}
+                          <span style={{ color: qualityColor(q.quality) }}>
+                            {qualityName(q.quality)}
+                          </span>{" "}
+                          ×{q.count.toLocaleString()}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
           </div>
         </div>
       )}

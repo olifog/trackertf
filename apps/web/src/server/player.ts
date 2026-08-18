@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { schema } from "@trackertf/db";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
+import { qualityRank } from "#/lib/quality";
 import { getDb } from "./db.ts";
 
 export interface PlayerClassRow {
@@ -21,6 +22,7 @@ export interface EquippedRow {
   classNum: number;
   slot: number;
   defindex: number;
+  quality: number;
   itemName: string | null;
   name: string | null;
   imageUrl: string | null;
@@ -100,7 +102,7 @@ export const fetchPlayer = createServerFn({ method: "GET" })
       .where(eq(schema.playerClassStats.steamid, data.steamid));
 
     const equipped = (await db.execute(sql`
-      select e.class_num, e.slot, e.defindex, s.item_name, s.name, s.image_url
+      select e.class_num, e.slot, e.defindex, e.quality, s.item_name, s.name, s.image_url
       from equipped_items e
       left join item_schema s using (defindex)
       where e.steamid = ${data.steamid}
@@ -125,9 +127,106 @@ export const fetchPlayer = createServerFn({ method: "GET" })
         classNum: e["class_num"] as number,
         slot: e["slot"] as number,
         defindex: e["defindex"] as number,
+        quality: (e["quality"] as number | null) ?? 6,
         itemName: e["item_name"] as string | null,
         name: e["name"] as string | null,
         imageUrl: e["image_url"] as string | null,
+      })),
+    };
+  });
+
+export interface InventoryRow {
+  defindex: number;
+  quality: number;
+  count: number;
+  itemName: string | null;
+  name: string | null;
+  imageUrl: string | null;
+}
+
+/**
+ * Full backpack, aggregated server-side to (defindex, quality, count) — big
+ * backpacks are ~1000 distinct rows vs ~3000 raw items, and the payload only
+ * travels once per row.
+ */
+export const fetchPlayerInventory = createServerFn({ method: "GET" })
+  .validator(z.object({ steamid: z.string().regex(/^\d{17}$/) }))
+  .handler(async ({ data }): Promise<InventoryRow[]> => {
+    const db = getDb();
+    const rows = (await db.execute(sql`
+      select i.defindex, i.quality, count(*)::int as count,
+             s.item_name, s.name, s.image_url
+      from player_items_raw r
+      cross join lateral (
+        select (item ->> 'defindex')::int as defindex,
+               coalesce((item ->> 'quality')::int, 6) as quality
+        from jsonb_array_elements(r.payload) item
+      ) i
+      left join item_schema s on s.defindex = i.defindex
+      where r.steamid = ${data.steamid}
+      group by i.defindex, i.quality, s.item_name, s.name, s.image_url
+    `)) as unknown as Record<string, unknown>[];
+
+    return rows
+      .map((r) => ({
+        defindex: r["defindex"] as number,
+        quality: r["quality"] as number,
+        count: r["count"] as number,
+        itemName: r["item_name"] as string | null,
+        name: r["name"] as string | null,
+        imageUrl: r["image_url"] as string | null,
+      }))
+      .toSorted(
+        (a, b) => qualityRank(a.quality) - qualityRank(b.quality) || a.defindex - b.defindex,
+      );
+  });
+
+export interface FriendRow {
+  steamid: string;
+  friendSince: number;
+  personaname: string | null;
+  avatarHash: string | null;
+}
+
+export interface FriendsResponse {
+  /** false = no friend list stored (only BFS-expanded players get one) */
+  hasData: boolean;
+  totalFriends: number;
+  /** friends that exist in the players table (crawled), oldest first */
+  friends: FriendRow[];
+}
+
+export const fetchPlayerFriends = createServerFn({ method: "GET" })
+  .validator(z.object({ steamid: z.string().regex(/^\d{17}$/) }))
+  .handler(async ({ data }): Promise<FriendsResponse> => {
+    const db = getDb();
+    const totals = (await db.execute(sql`
+      select jsonb_array_length(payload)::int as total
+      from player_friends_raw
+      where steamid = ${data.steamid}
+    `)) as unknown as Record<string, unknown>[];
+    const total = totals[0]?.["total"] as number | undefined;
+    if (total === undefined) return { hasData: false, totalFriends: 0, friends: [] };
+
+    const rows = (await db.execute(sql`
+      select f ->> 'steamid' as steamid,
+             coalesce((f ->> 'friend_since')::bigint, 0) as friend_since,
+             p.personaname, p.avatar_hash
+      from player_friends_raw r
+      cross join lateral jsonb_array_elements(r.payload) f
+      join players p on p.steamid = f ->> 'steamid'
+      where r.steamid = ${data.steamid}
+      order by friend_since
+    `)) as unknown as Record<string, unknown>[];
+
+    return {
+      hasData: true,
+      totalFriends: total,
+      friends: rows.map((r) => ({
+        steamid: r["steamid"] as string,
+        friendSince: Number(r["friend_since"]),
+        personaname: r["personaname"] as string | null,
+        avatarHash: r["avatar_hash"] as string | null,
       })),
     };
   });
@@ -155,4 +254,16 @@ export const playerQueryOptions = (steamid: string) =>
   queryOptions({
     queryKey: ["player", steamid],
     queryFn: () => fetchPlayer({ data: { steamid } }),
+  });
+
+export const playerInventoryQueryOptions = (steamid: string) =>
+  queryOptions({
+    queryKey: ["player-inventory", steamid],
+    queryFn: () => fetchPlayerInventory({ data: { steamid } }),
+  });
+
+export const playerFriendsQueryOptions = (steamid: string) =>
+  queryOptions({
+    queryKey: ["player-friends", steamid],
+    queryFn: () => fetchPlayerFriends({ data: { steamid } }),
   });
