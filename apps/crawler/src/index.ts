@@ -265,12 +265,12 @@ async function crawlOne({ steamid, source }: FrontierItem): Promise<void> {
  * Cohort-based recrawl scheduling (delta design doc §2):
  *  A "hyper"  — active in last 2 weeks → every 8h (session-resolution windows)
  *  C rotation — rest of the public-stats corpus → every 14d
- * Recrawls run at priority -1 so new-player discovery always wins.
+ * Recrawls run at priority 1: above the (endless) friend-BFS backlog, below manual seeds — the scheduler cap keeps discovery fed.
  */
 async function scheduleRecrawls(): Promise<void> {
   await db.execute(sql`
     insert into crawl_frontier (steamid, source, priority)
-    select p.steamid, 'recrawl'::frontier_source, -1
+    select p.steamid, 'recrawl'::frontier_source, 1
     from players p
     where p.stats_status = 'ok'
       and not exists (select 1 from crawl_frontier f where f.steamid = p.steamid)
