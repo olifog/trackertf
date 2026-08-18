@@ -111,6 +111,8 @@ export const equippedItems = pgTable(
     defindex: integer().notNull(),
     classNum: smallint().notNull(),
     slot: smallint().notNull(),
+    /** item quality (6 = Unique; stock backfill rows are always 6) */
+    quality: smallint().notNull().default(6),
   },
   (t) => [
     primaryKey({ columns: [t.steamid, t.classNum, t.slot, t.defindex] }),
