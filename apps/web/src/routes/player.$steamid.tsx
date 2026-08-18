@@ -55,7 +55,7 @@ function PlayerPage() {
         <p className="text-muted-foreground">
           <span className="font-mono">{steamid}</span> isn't in the dataset yet.
           {p.queued
-            ? " It's been queued for crawling — check back in a few minutes."
+            ? " It's been queued for crawling, check back in a few minutes."
             : " Queueing failed; try again later."}
         </p>
       </div>
@@ -127,7 +127,7 @@ function PlayerPage() {
                   <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
                     {totalClassSeconds > 0
                       ? `${((c.playtimeSeconds / totalClassSeconds) * 100).toFixed(0)}%`
-                      : "—"}
+                      : "-"}
                   </TableCell>
                   <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
                     {c.kills.toLocaleString()}
@@ -135,17 +135,17 @@ function PlayerPage() {
                   <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
                     {c.playtimeSeconds > 0
                       ? ((c.kills * 3600) / c.playtimeSeconds).toFixed(1)
-                      : "—"}
+                      : "-"}
                   </TableCell>
                   <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
                     {c.playtimeSeconds > 0
                       ? ((c.pointsScored * 60) / c.playtimeSeconds).toFixed(2)
-                      : "—"}
+                      : "-"}
                   </TableCell>
                   <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
                     {c.playtimeSeconds > 0
                       ? ((c.damageDealt * 60) / c.playtimeSeconds).toFixed(0)
-                      : "—"}
+                      : "-"}
                   </TableCell>
                   <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
                     {c.killAssists.toLocaleString()}
@@ -158,11 +158,7 @@ function PlayerPage() {
             </TableBody>
           </Table>
           <p className="mt-1 text-xs text-muted-foreground">
-            No deaths stat exists in Steam's TF2 data, so no K/D — see{" "}
-            <a href="/methodology" className="underline">
-              methodology
-            </a>
-            .
+            No deaths stat exists in Steam's TF2 data, so no K/D.
           </p>
         </div>
       ) : (

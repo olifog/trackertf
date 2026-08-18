@@ -23,11 +23,11 @@ function Home() {
         <h1 className="font-heading text-4xl font-bold">tracker.tf</h1>
       </div>
       <p className="max-w-prose text-muted-foreground">
-        A central source for Team Fortress 2 statistics — the successor to style.tf. Weapon usage
-        rates, loadout combinations, class stats and playerbase trends, focused on official casual.
+        Team Fortress 2 weapon usage rates, loadout combinations, class stats and playerbase trends,
+        focused on official casual.
       </p>
       <Link to="/usage" className={buttonVariants({ size: "lg" })}>
-        Explore weapon usage →
+        Weapon usage →
       </Link>
       {me && (
         <div className="flex w-full max-w-prose items-center gap-3 rounded-lg border bg-card/50 p-4">
@@ -45,7 +45,7 @@ function Home() {
             <p className="text-xs text-muted-foreground">
               {me.found
                 ? "Your class stats and loadouts, as seen by the crawler."
-                : "Your profile hasn't been crawled yet — it's queued, check back soon."}
+                : "Your profile hasn't been crawled yet. It's queued, check back soon."}
             </p>
           </div>
         </div>

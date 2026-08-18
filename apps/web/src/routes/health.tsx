@@ -28,7 +28,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 const pct = (part: number, total: number) =>
-  total === 0 ? "—" : `${((part / total) * 100).toFixed(1)}%`;
+  total === 0 ? "-" : `${((part / total) * 100).toFixed(1)}%`;
 
 function HealthPage() {
   const { data } = useSuspenseQuery(healthQueryOptions());
@@ -114,7 +114,7 @@ function HealthPage() {
             {endpoints.size === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="py-4 text-center text-muted-foreground">
-                  No API metrics recorded yet — counters started with the latest crawler deploy.
+                  No API metrics recorded yet. Counters started with the latest crawler deploy.
                 </TableCell>
               </TableRow>
             )}
@@ -123,13 +123,9 @@ function HealthPage() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        "Private" is data that exists but isn't visible to us (privacy settings); persistent
+        "Private" is data that exists but isn't visible to us (privacy settings). Persistent
         GetPlayerItems 503s are counted there after 3 spaced retries, so brief Game Coordinator
-        outages appear under errors instead. See{" "}
-        <a href="/methodology" className="underline">
-          methodology
-        </a>{" "}
-        for details.
+        outages appear under errors instead.
       </p>
     </div>
   );

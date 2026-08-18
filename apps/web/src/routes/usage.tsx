@@ -415,7 +415,7 @@ function UsagePage() {
 
       {items.length === 0 && !query.isFetching ? (
         <p className="text-muted-foreground">
-          No data yet for this filter combination — the crawler is warming up.
+          No data yet for this filter combination. The crawler is warming up.
         </p>
       ) : (
         <div className="relative">

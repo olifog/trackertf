@@ -39,11 +39,7 @@
       "compositePrimaryKeys": {
         "api_metrics_hour_endpoint_outcome_pk": {
           "name": "api_metrics_hour_endpoint_outcome_pk",
-          "columns": [
-            "hour",
-            "endpoint",
-            "outcome"
-          ]
+          "columns": ["hour", "endpoint", "outcome"]
         }
       },
       "uniqueConstraints": {},
@@ -184,12 +180,8 @@
           "name": "equipped_items_steamid_players_steamid_fk",
           "tableFrom": "equipped_items",
           "tableTo": "players",
-          "columnsFrom": [
-            "steamid"
-          ],
-          "columnsTo": [
-            "steamid"
-          ],
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -197,12 +189,7 @@
       "compositePrimaryKeys": {
         "equipped_items_steamid_class_num_slot_defindex_pk": {
           "name": "equipped_items_steamid_class_num_slot_defindex_pk",
-          "columns": [
-            "steamid",
-            "class_num",
-            "slot",
-            "defindex"
-          ]
+          "columns": ["steamid", "class_num", "slot", "defindex"]
         }
       },
       "uniqueConstraints": {},
@@ -238,11 +225,7 @@
       "compositePrimaryKeys": {
         "item_class_slots_defindex_class_num_slot_pk": {
           "name": "item_class_slots_defindex_class_num_slot_pk",
-          "columns": [
-            "defindex",
-            "class_num",
-            "slot"
-          ]
+          "columns": ["defindex", "class_num", "slot"]
         }
       },
       "uniqueConstraints": {},
@@ -345,10 +328,7 @@
       "compositePrimaryKeys": {
         "leaderboard_entries_board_key_rank_pk": {
           "name": "leaderboard_entries_board_key_rank_pk",
-          "columns": [
-            "board_key",
-            "rank"
-          ]
+          "columns": ["board_key", "rank"]
         }
       },
       "uniqueConstraints": {},
@@ -452,12 +432,8 @@
           "name": "match_participants_segment_id_match_segments_id_fk",
           "tableFrom": "match_participants",
           "tableTo": "match_segments",
-          "columnsFrom": [
-            "segment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["segment_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -465,10 +441,7 @@
       "compositePrimaryKeys": {
         "match_participants_segment_id_name_pk": {
           "name": "match_participants_segment_id_name_pk",
-          "columns": [
-            "segment_id",
-            "name"
-          ]
+          "columns": ["segment_id", "name"]
         }
       },
       "uniqueConstraints": {},
@@ -626,12 +599,8 @@
           "name": "player_class_stats_steamid_players_steamid_fk",
           "tableFrom": "player_class_stats",
           "tableTo": "players",
-          "columnsFrom": [
-            "steamid"
-          ],
-          "columnsTo": [
-            "steamid"
-          ],
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -639,10 +608,7 @@
       "compositePrimaryKeys": {
         "player_class_stats_steamid_class_num_pk": {
           "name": "player_class_stats_steamid_class_num_pk",
-          "columns": [
-            "steamid",
-            "class_num"
-          ]
+          "columns": ["steamid", "class_num"]
         }
       },
       "uniqueConstraints": {},
@@ -679,12 +645,8 @@
           "name": "player_friends_raw_steamid_players_steamid_fk",
           "tableFrom": "player_friends_raw",
           "tableTo": "players",
-          "columnsFrom": [
-            "steamid"
-          ],
-          "columnsTo": [
-            "steamid"
-          ],
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -724,12 +686,8 @@
           "name": "player_items_raw_steamid_players_steamid_fk",
           "tableFrom": "player_items_raw",
           "tableTo": "players",
-          "columnsFrom": [
-            "steamid"
-          ],
-          "columnsTo": [
-            "steamid"
-          ],
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -780,10 +738,7 @@
       "compositePrimaryKeys": {
         "player_stat_snapshots_steamid_fetched_at_pk": {
           "name": "player_stat_snapshots_steamid_fetched_at_pk",
-          "columns": [
-            "steamid",
-            "fetched_at"
-          ]
+          "columns": ["steamid", "fetched_at"]
         }
       },
       "uniqueConstraints": {},
@@ -820,12 +775,8 @@
           "name": "player_stats_raw_steamid_players_steamid_fk",
           "tableFrom": "player_stats_raw",
           "tableTo": "players",
-          "columnsFrom": [
-            "steamid"
-          ],
-          "columnsTo": [
-            "steamid"
-          ],
+          "columnsFrom": ["steamid"],
+          "columnsTo": ["steamid"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1022,12 +973,7 @@
       "compositePrimaryKeys": {
         "server_snapshots_scanned_at_map_region_official_pk": {
           "name": "server_snapshots_scanned_at_map_region_official_pk",
-          "columns": [
-            "scanned_at",
-            "map",
-            "region",
-            "official"
-          ]
+          "columns": ["scanned_at", "map", "region", "official"]
         }
       },
       "uniqueConstraints": {},
@@ -1248,10 +1194,7 @@
       "compositePrimaryKeys": {
         "weapon_class_stats_defindex_class_num_pk": {
           "name": "weapon_class_stats_defindex_class_num_pk",
-          "columns": [
-            "defindex",
-            "class_num"
-          ]
+          "columns": ["defindex", "class_num"]
         }
       },
       "uniqueConstraints": {},
@@ -1264,24 +1207,12 @@
     "public.fetch_status": {
       "name": "fetch_status",
       "schema": "public",
-      "values": [
-        "ok",
-        "private",
-        "not_found",
-        "empty",
-        "error"
-      ]
+      "values": ["ok", "private", "not_found", "empty", "error"]
     },
     "public.frontier_source": {
       "name": "frontier_source",
       "schema": "public",
-      "values": [
-        "seed",
-        "friend_bfs",
-        "review_sample",
-        "random_sample",
-        "recrawl"
-      ]
+      "values": ["seed", "friend_bfs", "review_sample", "random_sample", "recrawl"]
     }
   },
   "schemas": {},

@@ -64,7 +64,7 @@ function ItemPage() {
             </span>
           </h1>
           <p className="text-sm text-muted-foreground">
-            {item.slot ?? "—"} ·{" "}
+            {item.slot ?? "-"} ·{" "}
             {item.usedByClasses.length === 9
               ? "all classes"
               : item.usedByClasses.map((c) => CLASS_NAMES[c]).join(", ")}
@@ -122,7 +122,7 @@ function ItemPage() {
                         key={p.label}
                         className="py-1 text-right font-mono text-sm tabular-nums"
                       >
-                        {u ? `${(u.usage * 100).toFixed(1)}%` : "—"}
+                        {u ? `${(u.usage * 100).toFixed(1)}%` : "-"}
                       </TableCell>
                     );
                   })}
@@ -138,7 +138,7 @@ function ItemPage() {
           <h2 className="mb-2 font-heading text-lg font-semibold">
             Performance of players equipping this{" "}
             <span className="text-sm font-normal text-muted-foreground">
-              (lifetime per-class rates, 10h+ on class — correlation, not causation)
+              (lifetime per-class rates, 10h+ on class, correlation not causation)
             </span>
           </h2>
           <Table>

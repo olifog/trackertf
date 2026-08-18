@@ -2,7 +2,6 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   ActivityIcon,
   ArrowRightIcon,
-  BookOpenIcon,
   ChartBarIcon,
   SwordsIcon,
   TrophyIcon,
@@ -26,7 +25,6 @@ const PAGES = [
   { label: "Usage", to: "/usage", icon: ChartBarIcon },
   { label: "Leaderboards", to: "/leaderboards", icon: TrophyIcon },
   { label: "Health", to: "/health", icon: ActivityIcon },
-  { label: "Methodology", to: "/methodology", icon: BookOpenIcon },
 ] as const;
 
 /** steamid64 or steamcommunity profile URL → resolvable via lookupPlayer */

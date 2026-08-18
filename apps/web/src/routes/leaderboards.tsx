@@ -224,13 +224,9 @@ function LeaderboardsPage() {
 
       <p className="text-xs text-muted-foreground">
         Among crawled players with public profiles, no VAC bans
-        {participants !== null && <> — {participants.toLocaleString()} qualifying players</>}.
+        {participants !== null && <>, {participants.toLocaleString()} qualifying players</>}.
         {def.kind === "per_hour" && <> Rate boards require {currentHours}+ hours on the scope.</>}{" "}
-        The sample skews connected/veteran players — see{" "}
-        <a href="/methodology" className="underline">
-          methodology
-        </a>
-        .
+        Sample skews connected and veteran players.
       </p>
 
       <Table>
@@ -287,7 +283,7 @@ function LeaderboardsPage() {
                 {formatValue(row.value, def.decimals)}
               </TableCell>
               <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
-                {participants ? `top ${((100 * row.rank) / participants).toFixed(1)}%` : "—"}
+                {participants ? `top ${((100 * row.rank) / participants).toFixed(1)}%` : "-"}
               </TableCell>
             </TableRow>
           ))}
