@@ -4,6 +4,7 @@
  * Replaces styletf's 400-combo Mongo cartesian product with 4 SQL passes.
  */
 import { createDbFromEnv } from "@trackertf/db";
+import { BOARDS, boardSelectSql } from "@trackertf/db/boards";
 import { sql } from "drizzle-orm";
 
 const db = createDbFromEnv();
@@ -154,6 +155,20 @@ async function recomputeWeaponStats(): Promise<void> {
   });
 }
 
+/** top-100 per board across the whole metric × scope × kind grid (boards.ts) */
+async function recomputeLeaderboards(): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`delete from leaderboard_entries`);
+    for (const board of BOARDS) {
+      await tx.execute(sql`
+        insert into leaderboard_entries (board_key, rank, steamid, value)
+        select ${board.key}, row_number() over (order by t.value desc, t.steamid), t.steamid, t.value
+        from (${sql.raw(boardSelectSql(board, 100))}) t
+      `);
+    }
+  });
+}
+
 async function main(): Promise<void> {
   console.log("analyser started");
   for (;;) {
@@ -161,7 +176,10 @@ async function main(): Promise<void> {
     try {
       await recompute();
       await recomputeWeaponStats();
-      console.log(`usage_stats + weapon_class_stats recomputed in ${Date.now() - start}ms`);
+      await recomputeLeaderboards();
+      console.log(
+        `usage_stats + weapon_class_stats + leaderboard_entries recomputed in ${Date.now() - start}ms`,
+      );
     } catch (err) {
       console.error("analyser run failed:", err);
     }

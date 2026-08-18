@@ -36,6 +36,13 @@
       "when": 1786983762571,
       "tag": "0004_bright_darkstar",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787039366059,
+      "tag": "0005_crazy_lady_bullseye",
+      "breakpoints": true
     }
   ]
 }

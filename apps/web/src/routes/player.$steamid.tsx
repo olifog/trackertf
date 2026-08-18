@@ -16,11 +16,16 @@ import {
   itemDisplayName,
   SLOT_NAMES,
 } from "#/lib/tf2";
+import { BOARD_MAP } from "@trackertf/db/boards";
+import { playerRanksQueryOptions } from "#/server/leaderboards";
 import { playerQueryOptions } from "#/server/player";
 
 export const Route = createFileRoute("/player/$steamid")({
   loader: ({ context, params }) =>
-    context.queryClient.ensureQueryData(playerQueryOptions(params.steamid)),
+    Promise.all([
+      context.queryClient.ensureQueryData(playerQueryOptions(params.steamid)),
+      context.queryClient.ensureQueryData(playerRanksQueryOptions(params.steamid)),
+    ]),
   component: PlayerPage,
 });
 
@@ -29,6 +34,8 @@ const CLASS_ORDER = [1, 3, 7, 4, 6, 9, 5, 2, 8];
 function PlayerPage() {
   const { steamid } = Route.useParams();
   const { data: p } = useSuspenseQuery(playerQueryOptions(steamid));
+  const { data: ranks } = useSuspenseQuery(playerRanksQueryOptions(steamid));
+  const bestRanks = ranks.slice(0, 20);
 
   if (!p.found) {
     return (
@@ -149,6 +156,48 @@ function PlayerPage() {
         </div>
       ) : (
         <p className="text-muted-foreground">Game stats are private for this player.</p>
+      )}
+
+      {bestRanks.length > 0 && (
+        <div>
+          <h2 className="mb-2 font-heading text-lg font-semibold">Leaderboard positions</h2>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Board</TableHead>
+                <TableHead className="w-32 text-right">Rank</TableHead>
+                <TableHead className="w-32 text-right">Value</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {bestRanks.map((r) => (
+                <TableRow key={r.boardKey} className="h-8">
+                  <TableCell className="py-1">
+                    <Link
+                      to="/leaderboards"
+                      search={{ board: r.boardKey }}
+                      className="hover:underline"
+                    >
+                      {r.label}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+                    #{r.rank.toLocaleString()}
+                    <span className="text-muted-foreground"> / {r.of.toLocaleString()}</span>
+                  </TableCell>
+                  <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+                    {r.value.toLocaleString(undefined, {
+                      maximumFractionDigits: BOARD_MAP.get(r.boardKey)?.decimals ?? 0,
+                    })}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Best {bestRanks.length} of {ranks.length} boards, ranked live among crawled players.
+          </p>
+        </div>
       )}
 
       {p.equipped.length > 0 && (
