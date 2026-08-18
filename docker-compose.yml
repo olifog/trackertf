@@ -52,5 +52,18 @@ services:
       DATABASE_URL: postgres://trackertf:${POSTGRES_PASSWORD}@postgres:5432/trackertf
     command: ["bun", "run", "src/analyser.ts"]
 
+  scanner:
+    build:
+      context: .
+      dockerfile: apps/crawler/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://trackertf:${POSTGRES_PASSWORD}@postgres:5432/trackertf
+      STEAM_API_KEY: ${STEAM_API_KEY:?set in .env}
+    command: ["bun", "run", "src/scanner.ts"]
+
 volumes:
   pgdata:
