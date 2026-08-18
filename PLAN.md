@@ -213,3 +213,18 @@ reskin_group)` — reskin_group hand-curated + prefab-derived, enables "merge re
   credibility feature).
 - No deaths stat exists in Steam's TF2 stats — never present "K/D" as such; use kills/hour
   or points/minute.
+
+## Analytics engine policy (decided 2026-08-18)
+
+Postgres stays the transactional source of truth permanently (frontier SKIP LOCKED,
+players upserts, sessions, item schema). For "incredibly fast" dynamic
+leaderboards/percentiles:
+- NOW: `board_distributions` in the analyser — ~1000-point quantile arrays per
+  (metric, class, threshold bucket) every 15 min; percentile lookup = array binary
+  search (microseconds, no scans). Sliders snap to buckets.
+- ADD CLICKHOUSE as an analytics sidecar (docker on VPS, Vercel queries its HTTPS
+  interface) when ANY of: stat_windows + match_participants > ~10M rows; want truly
+  arbitrary-threshold interactive leaderboards; player-page analytics p95 > 100ms.
+  Migrate ONLY append-only streams (snapshots, windows, match observations,
+  server_snapshots) — never the mutable tables. CH primitives that map 1:1:
+  AggregatingMergeTree + quantileTDigest sketches per board.
