@@ -1,0 +1,1 @@
+ALTER TABLE "equipped_items" ADD COLUMN "strange_kills" integer DEFAULT 0 NOT NULL;

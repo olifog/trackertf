@@ -114,6 +114,8 @@ export const equippedItems = pgTable(
     slot: smallint().notNull(),
     /** item quality (6 = Unique; stock backfill rows are always 6) */
     quality: smallint().notNull().default(6),
+    /** Strange kill_eater (attr 214) count; 0 if not Strange / not captured */
+    strangeKills: integer("strange_kills").notNull().default(0),
   },
   (t) => [
     primaryKey({ columns: [t.steamid, t.classNum, t.slot, t.defindex] }),
