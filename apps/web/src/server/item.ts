@@ -69,10 +69,14 @@ export const fetchItem = createServerFn({ method: "GET" })
           .where(eq(schema.itemSchema.reskinGroup, item.reskinGroup))
       : [];
 
+    // usage_stats now buckets populations (active_minutes_2wk × minutes) —
+    // keep this page's original 2×2 matrix by selecting the matching buckets
     const usage = (await db.execute(sql`
-      select class_num, active_only, minutes_threshold, usage, count, sample_size
+      select class_num, (active_minutes_2wk >= 1) as active_only, minutes_threshold,
+             usage, count, sample_size
       from usage_stats
       where defindex = ${groupId} and slot = -1 and merge_reskins
+        and active_minutes_2wk in (0, 1) and minutes_threshold in (0, 120000)
       order by class_num
     `)) as unknown as Record<string, unknown>[];
 

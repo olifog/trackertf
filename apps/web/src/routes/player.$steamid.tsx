@@ -165,6 +165,7 @@ function PlayerPage() {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Board</TableHead>
+                <TableHead className="w-24 text-right">Percentile</TableHead>
                 <TableHead className="w-32 text-right">Rank</TableHead>
                 <TableHead className="w-32 text-right">Value</TableHead>
               </TableRow>
@@ -180,6 +181,11 @@ function PlayerPage() {
                     >
                       {r.label}
                     </Link>
+                  </TableCell>
+                  <TableCell className="py-1 text-right">
+                    <span className="rounded bg-secondary/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                      top {((100 * r.rank) / r.of).toFixed(1)}%
+                    </span>
                   </TableCell>
                   <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
                     #{r.rank.toLocaleString()}

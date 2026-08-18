@@ -209,6 +209,16 @@ export const leaderboardEntries = pgTable(
   (t) => [primaryKey({ columns: [t.boardKey, t.rank] })],
 );
 
+/**
+ * Per-board participant counts (percentile denominators), rewritten alongside
+ * leaderboard_entries by the analyser.
+ * NOTE: web_ro needs SELECT on leaderboard_meta (deployer handles grants).
+ */
+export const leaderboardMeta = pgTable("leaderboard_meta", {
+  boardKey: text().primaryKey(),
+  participants: integer().notNull(),
+});
+
 export const crawlFrontier = pgTable(
   "crawl_frontier",
   {
@@ -243,7 +253,7 @@ export const serverSnapshots = pgTable(
 
 /**
  * Precomputed usage aggregates served by the site (the styletf model).
- * classNum/slot -1 = "any"; minutesThreshold 0 = "any"; activeOnly false = "any".
+ * classNum/slot -1 = "any"; minutesThreshold 0 = "any"; activeMinutes2wk 0 = "any".
  */
 export const usageStats = pgTable(
   "usage_stats",
@@ -251,7 +261,9 @@ export const usageStats = pgTable(
     defindex: integer().notNull(),
     classNum: smallint().notNull(),
     slot: smallint().notNull(),
-    activeOnly: boolean().notNull(),
+    /** min minutes played in the last 2 weeks (bucket: 0/1/300/900) */
+    activeMinutes2wk: smallint("active_minutes_2wk").notNull(),
+    /** min lifetime minutes (bucket: 0/30000/60000/120000/240000) */
     minutesThreshold: integer().notNull(),
     mergeReskins: boolean().notNull(),
     usage: real().notNull(),
@@ -265,14 +277,14 @@ export const usageStats = pgTable(
       t.defindex,
       t.classNum,
       t.slot,
-      t.activeOnly,
+      t.activeMinutes2wk,
       t.minutesThreshold,
       t.mergeReskins,
     ),
     index("usage_stats_filter_idx").on(
       t.classNum,
       t.slot,
-      t.activeOnly,
+      t.activeMinutes2wk,
       t.minutesThreshold,
       t.mergeReskins,
     ),
