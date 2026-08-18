@@ -6,10 +6,12 @@
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "seed": "bun run src/seed.ts",
+    "syncer": "bun run src/syncer.ts",
     "sync-schema": "bun run src/sync-schema.ts",
     "typecheck": "tsgo --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@trackertf/clickhouse": "workspace:*",
     "@trackertf/db": "workspace:*",
     "@trackertf/steam": "workspace:*",
     "@trackertf/tf2-schema": "workspace:*",

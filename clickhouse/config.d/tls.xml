@@ -1,0 +1,11 @@
+<clickhouse>
+    <!-- HTTPS for external (Vercel) clients; plaintext 8123 stays internal-only. -->
+    <https_port>8443</https_port>
+    <openSSL>
+        <server>
+            <certificateFile>/certs/server.crt</certificateFile>
+            <privateKeyFile>/certs/server.key</privateKeyFile>
+            <disableProtocols>sslv2,sslv3</disableProtocols>
+        </server>
+    </openSSL>
+</clickhouse>

@@ -17,6 +17,7 @@
     "@tanstack/react-router": "^1.170.29",
     "@tanstack/react-router-ssr-query": "^1.167.1",
     "@tanstack/react-start": "^1.168.46",
+    "@trackertf/clickhouse": "workspace:*",
     "@trackertf/db": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
