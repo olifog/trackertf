@@ -219,6 +219,7 @@ reskin_group)` — reskin_group hand-curated + prefab-derived, enables "merge re
 Postgres stays the transactional source of truth permanently (frontier SKIP LOCKED,
 players upserts, sessions, item schema). For "incredibly fast" dynamic
 leaderboards/percentiles:
+
 - NOW: `board_distributions` in the analyser — ~1000-point quantile arrays per
   (metric, class, threshold bucket) every 15 min; percentile lookup = array binary
   search (microseconds, no scans). Sliders snap to buckets.
