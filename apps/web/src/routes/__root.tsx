@@ -1,13 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
-import {
-  createRootRouteWithContext,
-  HeadContent,
-  Link,
-  Scripts,
-  useNavigate,
-} from "@tanstack/react-router";
-import { useState } from "react";
-import { lookupPlayer } from "#/server/player";
+import { createRootRouteWithContext, HeadContent, Link, Scripts } from "@tanstack/react-router";
+import { CommandPalette } from "#/components/command-palette";
 
 import appCss from "../styles.css?url";
 
@@ -47,38 +40,6 @@ function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
   );
 }
 
-function PlayerSearch() {
-  const navigate = useNavigate();
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!value.trim() || busy) return;
-    setBusy(true);
-    try {
-      const { steamid } = await lookupPlayer({ data: { query: value } });
-      if (steamid) {
-        setValue("");
-        await navigate({ to: "/player/$steamid", params: { steamid } });
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form onSubmit={submit} className="ml-auto">
-      <input
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="steamid / profile url…"
-        className={`h-7 w-44 rounded-md border bg-secondary/40 px-2 font-mono text-xs outline-none placeholder:text-muted-foreground/60 focus:border-ring ${busy ? "opacity-50" : ""}`}
-      />
-    </form>
-  );
-}
-
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
@@ -96,7 +57,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
             <NavLink to="/leaderboards">Leaderboards</NavLink>
             <NavLink to="/health">Health</NavLink>
             <NavLink to="/methodology">Methodology</NavLink>
-            <PlayerSearch />
+            <CommandPalette />
           </nav>
         </header>
         <main className="mx-auto max-w-4xl px-6 py-8">{children}</main>

@@ -191,6 +191,7 @@ function UsagePage() {
   const { data } = useSuspenseQuery(usageQueryOptions(search));
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
   const [showAll, setShowAll] = useState(false);
+  const [filter, setFilter] = useState("");
 
   const variantsByGroup = useMemo(() => {
     const map = new Map<number, UsageRow[]>();
@@ -203,7 +204,15 @@ function UsagePage() {
     return map;
   }, [data.variants]);
 
-  const allItems = data.rows.filter((r) => search.pdas || !PDA_NAMES.has(r.name ?? ""));
+  const query = filter.trim().toLowerCase();
+  const allItems = data.rows.filter(
+    (r) =>
+      (search.pdas || !PDA_NAMES.has(r.name ?? "")) &&
+      (!query ||
+        displayName(r).toLowerCase().includes(query) ||
+        (r.name ?? "").toLowerCase().includes(query) ||
+        String(r.defindex).includes(query)),
+  );
   const items = showAll ? allItems : allItems.slice(0, 100);
   const sample = data.rows[0]?.sampleSize;
   const computedAt = data.rows[0]?.computedAt;
@@ -275,6 +284,15 @@ function UsagePage() {
             label="2000+ hours played"
             checked={search.minutes > 0}
             patch={(next) => ({ minutes: next ? 120_000 : 0 })}
+          />
+        </FilterRow>
+
+        <FilterRow label="Search">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="name / schema name / defindex…"
+            className="h-8 w-64 rounded-md border bg-secondary/40 px-2 font-mono text-xs outline-none placeholder:text-muted-foreground/60 focus:border-ring"
           />
         </FilterRow>
 
