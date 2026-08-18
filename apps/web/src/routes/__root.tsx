@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, HeadContent, Link, Scripts } from "@tanstack/react-router";
+import { Analytics } from "@vercel/analytics/react";
 import { CommandPalette } from "#/components/command-palette";
 import { getSessionUser, type SessionUser } from "#/server/session";
 
@@ -113,6 +114,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
           </nav>
         </header>
         <main className="mx-auto max-w-4xl px-6 py-8">{children}</main>
+        <Analytics />
         <Scripts />
       </body>
     </html>
