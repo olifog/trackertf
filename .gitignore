@@ -15,3 +15,5 @@ dist
 routeTree.gen.ts
 
 .DS_Store
+
+.claude/

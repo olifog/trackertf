@@ -119,14 +119,57 @@ async function flushEnrichment(force = false): Promise<void> {
   }
 }
 
+/** Sum of per-class playtimes — the cheap "did anything happen" fingerprint. */
+function classTimeSum(stats: ReadonlyMap<string, number> | Record<string, number>): number {
+  const entries = stats instanceof Map ? stats.entries() : Object.entries(stats);
+  let sum = 0;
+  for (const [name, value] of entries) {
+    if (name.endsWith(".accum.iPlayTime") && !name.includes("mvm")) sum += value;
+  }
+  return sum;
+}
+
 async function crawlOne({ steamid, source }: FrontierItem): Promise<void> {
   const fetchedAt = new Date();
 
   // Transient errors throw before anything is recorded, so the frontier's
   // lock/attempt machinery retries instead of poisoning player statuses.
-  const items = unwrapOrThrow(steamid, await steam.getPlayerItems(steamid));
   const stats = unwrapOrThrow(steamid, await steam.getUserStats(steamid));
   const playtime = unwrapOrThrow(steamid, await steam.getTf2Playtime(steamid));
+
+  // Recrawls with no stat movement skip the expensive GetPlayerItems call
+  // (~2 calls per empty window instead of 3+ — the budget lever that makes
+  // session-resolution delta tracking viable).
+  if (source === "recrawl") {
+    const [last] = await db
+      .select({ payload: schema.playerStatSnapshots.payload })
+      .from(schema.playerStatSnapshots)
+      .where(eq(schema.playerStatSnapshots.steamid, steamid))
+      .orderBy(sql`fetched_at desc`)
+      .limit(1);
+    const unchanged =
+      stats.kind === "ok" &&
+      last !== undefined &&
+      classTimeSum(stats.data) === classTimeSum(last.payload as Record<string, number>);
+
+    if (stats.kind !== "ok" || unchanged) {
+      await db.transaction(async (tx) => {
+        await tx
+          .update(schema.players)
+          .set({
+            lastCrawled: fetchedAt,
+            statsStatus: stats.kind === "ok" ? "ok" : stats.kind,
+            tf2Minutes: playtime.kind === "ok" ? playtime.data.minutes : undefined,
+            tf2Minutes2wk: playtime.kind === "ok" ? playtime.data.minutes2wk : undefined,
+          })
+          .where(eq(schema.players.steamid, steamid));
+        await tx.delete(schema.crawlFrontier).where(eq(schema.crawlFrontier.steamid, steamid));
+      });
+      return;
+    }
+  }
+
+  const items = unwrapOrThrow(steamid, await steam.getPlayerItems(steamid));
 
   await db.transaction(async (tx) => {
     await tx
@@ -218,6 +261,40 @@ async function crawlOne({ steamid, source }: FrontierItem): Promise<void> {
   }
 }
 
+/**
+ * Cohort-based recrawl scheduling (delta design doc §2):
+ *  A "hyper"  — active in last 2 weeks → every 8h (session-resolution windows)
+ *  C rotation — rest of the public-stats corpus → every 14d
+ * Recrawls run at priority -1 so new-player discovery always wins.
+ */
+async function scheduleRecrawls(): Promise<void> {
+  await db.execute(sql`
+    insert into crawl_frontier (steamid, source, priority)
+    select p.steamid, 'recrawl'::frontier_source, -1
+    from players p
+    where p.stats_status = 'ok'
+      and not exists (select 1 from crawl_frontier f where f.steamid = p.steamid)
+      and (
+        (coalesce(p.tf2_minutes_2wk, 0) > 0 and p.last_crawled < now() - interval '8 hours')
+        or p.last_crawled < now() - interval '14 days'
+      )
+    order by p.last_crawled asc
+    limit 2000
+    on conflict (steamid) do nothing
+  `);
+}
+
+async function schedulerLoop(): Promise<void> {
+  for (;;) {
+    try {
+      await scheduleRecrawls();
+    } catch (err) {
+      console.error("recrawl scheduler:", err);
+    }
+    await Bun.sleep(15 * 60_000);
+  }
+}
+
 async function worker(id: number): Promise<void> {
   for (;;) {
     const pauseLeft = pausedUntil - Date.now();
@@ -246,4 +323,4 @@ async function worker(id: number): Promise<void> {
 }
 
 console.log(`crawler started (${CONCURRENCY} workers)`);
-await Promise.all(Array.from({ length: CONCURRENCY }, (_, i) => worker(i)));
+await Promise.all([schedulerLoop(), ...Array.from({ length: CONCURRENCY }, (_, i) => worker(i))]);
