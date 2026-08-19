@@ -5,11 +5,15 @@ export { CH_SCHEMA, applySchema } from "./schema.ts";
 
 /**
  * Build a ClickHouse client from a single `CLICKHOUSE_URL` of the form
- * `http://user:password@host:8123/database`, or from discrete
- * `CLICKHOUSE_{HOST,USER,PASSWORD,DB}` env vars. HTTP protocol (port 8123) is
- * used everywhere — it works from Bun (crawler/syncer) and Node (Vercel fns).
+ * `http[s]://user:password@host:port/database`, or from discrete
+ * `CLICKHOUSE_{HOST,USER,PASSWORD,DB}` env vars. Internal callers (crawler/
+ * syncer) use plaintext HTTP (8123) over the docker network; Vercel connects
+ * over HTTPS (8443) and pins the server's self-signed cert via
+ * `CLICKHOUSE_CA_CERT` (PEM) so TLS verifies without a public CA.
  */
 export function createChFromEnv(): Ch {
+  const caCert = process.env["CLICKHOUSE_CA_CERT"];
+  const tls = caCert ? { tls: { ca_cert: Buffer.from(caCert) } } : {};
   const url = process.env["CLICKHOUSE_URL"];
   if (url) {
     const u = new URL(url);
@@ -19,7 +23,7 @@ export function createChFromEnv(): Ch {
     u.username = "";
     u.password = "";
     u.pathname = "";
-    return createClient({ url: u.toString(), username, password, database });
+    return createClient({ url: u.toString(), username, password, database, ...tls });
   }
   const host = process.env["CLICKHOUSE_HOST"] ?? "localhost";
   const port = process.env["CLICKHOUSE_PORT"] ?? "8123";
@@ -28,6 +32,7 @@ export function createChFromEnv(): Ch {
     username: process.env["CLICKHOUSE_USER"] ?? "default",
     password: process.env["CLICKHOUSE_PASSWORD"] ?? "",
     database: process.env["CLICKHOUSE_DB"] ?? "trackertf",
+    ...tls,
   });
 }
 

@@ -1,33 +1,10 @@
-# Production stack for the VPS (UBUNTU-MAIN).
-# Postgres is exposed on 5432 for Vercel's serverless functions — protected by
-# scram auth + TLS; create a read-only role for the web app (see PLAN.md).
+# Production stack for the AWS EC2 box (us-east-1).
+# Postgres is RDS (managed, TLS) — reached via DATABASE_URL in .env; there is no
+# local postgres service. ClickHouse runs here as the analytics store: internal
+# services use plaintext 8123 over the docker network, Vercel connects over
+# HTTPS 8443 with the self-signed cert in ./certs (scripts/gen-ch-cert.sh).
 services:
-  postgres:
-    image: postgres:17
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: trackertf
-      POSTGRES_USER: trackertf
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      # self-signed cert for TLS; generate with scripts/gen-pg-cert.sh
-      - ./certs:/certs:ro
-    command: >-
-      postgres -c shared_buffers=2GB -c effective_cache_size=8GB
-      -c password_encryption=scram-sha-256
-      -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U trackertf"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Analytics store. Internal services reach it over plaintext HTTP on the
-  # docker network (8123); Vercel connects over HTTPS (8443) with the same
-  # self-signed certs postgres uses. Password auth in both cases.
+  # Analytics store. Rebuilt from Postgres every 15 min by the syncer.
   clickhouse:
     image: clickhouse/clickhouse-server:25.3-alpine
     restart: unless-stopped
@@ -47,7 +24,7 @@ services:
       - ./clickhouse/config.d:/etc/clickhouse-server/config.d:ro
       - ./certs:/certs:ro
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8123/ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -57,11 +34,8 @@ services:
       context: .
       dockerfile: apps/crawler/Dockerfile
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://trackertf:${POSTGRES_PASSWORD}@postgres:5432/trackertf
+      DATABASE_URL: ${DATABASE_URL:?set in .env}
       STEAM_API_KEY: ${STEAM_API_KEY:?set in .env}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
@@ -72,11 +46,8 @@ services:
       context: .
       dockerfile: apps/crawler/Dockerfile
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://trackertf:${POSTGRES_PASSWORD}@postgres:5432/trackertf
+      DATABASE_URL: ${DATABASE_URL:?set in .env}
     command: ["bun", "run", "src/analyser.ts"]
 
   syncer:
@@ -85,12 +56,10 @@ services:
       dockerfile: apps/crawler/Dockerfile
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://trackertf:${POSTGRES_PASSWORD}@postgres:5432/trackertf
+      DATABASE_URL: ${DATABASE_URL:?set in .env}
       CLICKHOUSE_URL: http://trackertf:${CLICKHOUSE_PASSWORD}@clickhouse:8123/trackertf
     command: ["bun", "run", "src/syncer.ts"]
 
@@ -99,11 +68,8 @@ services:
       context: .
       dockerfile: apps/crawler/Dockerfile
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://trackertf:${POSTGRES_PASSWORD}@postgres:5432/trackertf
+      DATABASE_URL: ${DATABASE_URL:?set in .env}
       STEAM_API_KEY: ${STEAM_API_KEY:?set in .env}
     command: ["bun", "run", "src/scanner.ts"]
 
@@ -112,15 +78,11 @@ services:
       context: .
       dockerfile: apps/crawler/Dockerfile
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://trackertf:${POSTGRES_PASSWORD}@postgres:5432/trackertf
+      DATABASE_URL: ${DATABASE_URL:?set in .env}
       STEAM_API_KEY: ${STEAM_API_KEY:?set in .env}
       SAMPLER_CALLS_PER_DAY: ${SAMPLER_CALLS_PER_DAY:-15000}
     command: ["bun", "run", "src/sampler.ts"]
 
 volumes:
-  pgdata:
   chdata:

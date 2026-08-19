@@ -1,0 +1,8 @@
+<clickhouse>
+    <!-- Listen on all IPv4 interfaces so other containers on the docker network
+         (the syncer) and Vercel (via published 8443) can connect. The docker
+         bridge network has no IPv6, so we bind IPv4 only and the healthcheck
+         uses 127.0.0.1 (not localhost, which would resolve to ::1). Plaintext
+         8123 is never published to the host; only 8443 (HTTPS) is. -->
+    <listen_host>0.0.0.0</listen_host>
+</clickhouse>

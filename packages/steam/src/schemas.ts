@@ -31,10 +31,15 @@ export const equipInfoSchema = z.object({
   slot: z.number(),
 });
 
+// Steam encodes some attribute values as numeric strings (e.g. kill_eater
+// counts, account ids) and others as non-numeric text (custom names, urls).
+// We only care about the numeric ones, so coerce and fall back to undefined
+// for anything that isn't a number rather than rejecting the whole item.
+const numericAttr = z.coerce.number().optional().catch(undefined);
 export const itemAttributeSchema = z.object({
   defindex: z.number(),
-  value: z.number().optional(),
-  float_value: z.number().optional(),
+  value: numericAttr,
+  float_value: numericAttr,
 });
 
 export const backpackItemSchema = z.object({
