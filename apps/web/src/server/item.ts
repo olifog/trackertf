@@ -1,8 +1,10 @@
 import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
+import { chQuery } from "@trackertf/clickhouse";
 import { schema } from "@trackertf/db";
 import { eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
+import { getCh } from "./ch.ts";
 import { getDb } from "./db.ts";
 
 export interface ItemInfo {
@@ -141,3 +143,118 @@ export const fetchItem = createServerFn({ method: "GET" })
 
 export const itemQueryOptions = (defindex: number) =>
   queryOptions({ queryKey: ["item", defindex], queryFn: () => fetchItem({ data: { defindex } }) });
+
+export interface PairedWeapon {
+  /** representative (reskin-group) defindex of the paired weapon */
+  defindex: number;
+  name: string | null;
+  itemName: string | null;
+  imageUrl: string | null;
+  slot: string | null;
+  /** loadouts that pair this weapon with the item */
+  count: number;
+  /** fraction of the item's loadouts that also run this weapon (0-1) */
+  share: number;
+}
+
+export interface ItemPairs {
+  /** representative defindex the pairing keys off (reskin group) */
+  gid: number;
+  /** loadouts containing this item at the chosen experience floor (denominator) */
+  loadoutsWithItem: number;
+  pairs: PairedWeapon[];
+}
+
+/** counts come back as UInt64 → JSON strings; gids (UInt32) arrive as numbers */
+interface RawPairRow {
+  gid: number;
+  cnt: string;
+}
+
+const PAIRS_LIMIT = 12;
+
+/**
+ * Weapons most commonly equipped alongside this item, from the ClickHouse
+ * `loadout` table (one row per player×class, `weapon_gids` = reskin-collapsed
+ * representative defindexes). Pairs by gid so results line up with the rest of
+ * the site; `minutes` applies the same lifetime-minute experience floor combos
+ * uses. Co-occurrence is within a single loadout (same player, same class).
+ */
+export const fetchItemPairs = createServerFn({ method: "GET" })
+  .validator(
+    z.object({
+      defindex: z.number().int().nonnegative(),
+      minutes: z.number().int().nonnegative().catch(0).default(0),
+    }),
+  )
+  .handler(async ({ data }): Promise<ItemPairs> => {
+    const db = getDb();
+    const [row] = await db
+      .select({
+        defindex: schema.itemSchema.defindex,
+        reskinGroup: schema.itemSchema.reskinGroup,
+      })
+      .from(schema.itemSchema)
+      .where(eq(schema.itemSchema.defindex, data.defindex))
+      .limit(1);
+    const gid = row ? (row.reskinGroup ?? row.defindex) : data.defindex;
+
+    const ch = getCh();
+    const [popRow] = await chQuery<{ n: string }>(
+      ch,
+      `SELECT count() AS n FROM loadout
+       WHERE has(weapon_gids, {gid:UInt32}) AND lifetime_min >= {min:UInt32}`,
+      { gid, min: data.minutes },
+    );
+    const loadoutsWithItem = popRow ? Number(popRow.n) : 0;
+
+    const raw = await chQuery<RawPairRow>(
+      ch,
+      `SELECT b AS gid, count() AS cnt
+       FROM loadout
+       ARRAY JOIN weapon_gids AS b
+       WHERE has(weapon_gids, {gid:UInt32}) AND b != {gid:UInt32} AND lifetime_min >= {min:UInt32}
+       GROUP BY b
+       ORDER BY cnt DESC, b
+       LIMIT {lim:UInt32}`,
+      { gid, min: data.minutes, lim: PAIRS_LIMIT },
+    );
+
+    const gidSet = raw.map((r) => r.gid);
+    const items =
+      gidSet.length > 0
+        ? await db
+            .select({
+              defindex: schema.itemSchema.defindex,
+              name: schema.itemSchema.name,
+              itemName: schema.itemSchema.itemName,
+              imageUrl: schema.itemSchema.imageUrl,
+              slot: schema.itemSchema.slot,
+            })
+            .from(schema.itemSchema)
+            .where(inArray(schema.itemSchema.defindex, gidSet))
+        : [];
+    const byDefindex = new Map(items.map((i) => [i.defindex, i]));
+
+    const pairs: PairedWeapon[] = raw.map((r) => {
+      const it = byDefindex.get(r.gid);
+      const count = Number(r.cnt);
+      return {
+        defindex: r.gid,
+        name: it?.name ?? null,
+        itemName: it?.itemName ?? null,
+        imageUrl: it?.imageUrl ?? null,
+        slot: it?.slot ?? null,
+        count,
+        share: loadoutsWithItem > 0 ? count / loadoutsWithItem : 0,
+      };
+    });
+
+    return { gid, loadoutsWithItem, pairs };
+  });
+
+export const itemPairsQueryOptions = (defindex: number, minutes: number) =>
+  queryOptions({
+    queryKey: ["itemPairs", defindex, minutes],
+    queryFn: () => fetchItemPairs({ data: { defindex, minutes } }),
+  });

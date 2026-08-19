@@ -327,7 +327,7 @@ function EcosystemPage() {
 function EmptyChart() {
   return (
     <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
-      No data yet — the scanner is warming up.
+      No data yet. The scanner is warming up.
     </div>
   );
 }

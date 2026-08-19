@@ -1,5 +1,6 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { useState } from "react";
 import {
   Table,
   TableBody,
@@ -10,7 +11,7 @@ import {
 } from "#/components/ui/table";
 import { qualityColor, qualityName, qualityRank } from "#/lib/quality";
 import { CLASS_NAMES, itemDisplayName } from "#/lib/tf2";
-import { itemQueryOptions } from "#/server/item";
+import { itemPairsQueryOptions, itemQueryOptions } from "#/server/item";
 
 export const Route = createFileRoute("/item/$defindex")({
   params: {
@@ -226,6 +227,90 @@ function ItemPage() {
             })}
           </div>
         </div>
+      )}
+
+      <PairedWeapons defindex={item.defindex} />
+    </div>
+  );
+}
+
+const PAIR_POPULATIONS = [
+  { label: "All players", minutes: 0 },
+  { label: "Experienced", minutes: 120_000 },
+] as const;
+
+function PairedWeapons({ defindex }: { defindex: number }) {
+  const [minutes, setMinutes] = useState(0);
+  const { data, isLoading } = useQuery(itemPairsQueryOptions(defindex, minutes));
+
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="font-heading text-lg font-semibold">
+          Most commonly paired weapons{" "}
+          <span className="text-sm font-normal text-muted-foreground">
+            (equipped in the same loadout; reskins merged)
+          </span>
+        </h2>
+        <div className="inline-flex divide-x divide-border overflow-hidden rounded-md border">
+          {PAIR_POPULATIONS.map((p) => (
+            <button
+              key={p.label}
+              type="button"
+              onClick={() => setMinutes(p.minutes)}
+              className={`flex h-8 items-center px-2.5 text-[13px] leading-none transition-colors ${
+                minutes === p.minutes
+                  ? "bg-primary font-medium text-primary-foreground"
+                  : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="py-4 font-mono text-xs text-muted-foreground">loading…</div>
+      ) : !data || data.pairs.length === 0 ? (
+        <p className="py-2 text-sm text-muted-foreground">
+          Not enough loadout data for this item yet.
+        </p>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-10 text-right">#</TableHead>
+              <TableHead>Weapon</TableHead>
+              <TableHead className="text-right">Loadouts</TableHead>
+              <TableHead className="text-right">Share</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.pairs.map((p, i) => (
+              <TableRow key={p.defindex} className="h-9">
+                <TableCell className="py-1 text-right font-mono text-muted-foreground">
+                  {i + 1}
+                </TableCell>
+                <TableCell className="py-1">
+                  <Link
+                    to="/item/$defindex"
+                    params={{ defindex: p.defindex }}
+                    className="flex items-center gap-2 transition-colors hover:text-primary"
+                  >
+                    {p.imageUrl && <img src={p.imageUrl} alt="" className="h-5 w-5" />}
+                    {itemDisplayName(p)}
+                  </Link>
+                </TableCell>
+                <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                  {p.count.toLocaleString()}
+                </TableCell>
+                <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+                  {(p.share * 100).toFixed(1)}%
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       )}
     </div>
   );

@@ -21,6 +21,7 @@ import {
 import { BOARD_MAP } from "@trackertf/db/boards";
 import { playerRanksQueryOptions } from "#/server/leaderboards";
 import {
+  friendRanksQueryOptions,
   type InventoryRow,
   playerFriendsQueryOptions,
   playerInventoryQueryOptions,
@@ -34,11 +35,20 @@ export const Route = createFileRoute("/player/$steamid")({
       context.queryClient.ensureQueryData(playerRanksQueryOptions(params.steamid)),
       context.queryClient.ensureQueryData(playerInventoryQueryOptions(params.steamid)),
       context.queryClient.ensureQueryData(playerFriendsQueryOptions(params.steamid)),
+      context.queryClient.ensureQueryData(friendRanksQueryOptions(params.steamid)),
     ]),
   component: PlayerPage,
 });
 
 const CLASS_ORDER = [1, 3, 7, 4, 6, 9, 5, 2, 8];
+
+// Strange (quality 11) rendering. Mirrors packages/tf2-schema/src/strange.ts —
+// inlined here to avoid adding a cross-package dependency to the web app.
+const STRANGE_QUALITY = 11;
+const HALE_OWN_KILLS = 25000;
+function haleOwnPct(kills: number): number {
+  return Math.min(100, (kills / HALE_OWN_KILLS) * 100);
+}
 
 function PlayerPage() {
   const { steamid } = Route.useParams();
@@ -46,6 +56,7 @@ function PlayerPage() {
   const { data: ranks } = useSuspenseQuery(playerRanksQueryOptions(steamid));
   const { data: inventory } = useSuspenseQuery(playerInventoryQueryOptions(steamid));
   const { data: friends } = useSuspenseQuery(playerFriendsQueryOptions(steamid));
+  const { data: friendRanks } = useSuspenseQuery(friendRanksQueryOptions(steamid));
   const bestRanks = ranks.slice(0, 20);
 
   if (!p.found) {
@@ -213,6 +224,42 @@ function PlayerPage() {
         </div>
       )}
 
+      {friendRanks.hasData && (
+        <div>
+          <h2 className="mb-2 font-heading text-lg font-semibold">Rank among friends</h2>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Board</TableHead>
+                <TableHead className="w-32 text-right">Rank</TableHead>
+                <TableHead className="w-32 text-right">Value</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {friendRanks.ranks.map((r) => (
+                <TableRow key={r.metric} className="h-8">
+                  <TableCell className="py-1">{r.label}</TableCell>
+                  <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+                    #{r.rank.toLocaleString()}
+                    <span className="text-muted-foreground">
+                      {" "}
+                      / {friendRanks.total.toLocaleString()}
+                    </span>
+                  </TableCell>
+                  <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+                    {r.value.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Ranked live among {friendRanks.total.toLocaleString()} crawled friends (public,
+            non-VAC).
+          </p>
+        </div>
+      )}
+
       {p.equipped.length > 0 && (
         <div>
           <h2 className="mb-2 font-heading text-lg font-semibold">Active loadouts</h2>
@@ -228,23 +275,28 @@ function PlayerPage() {
                     .filter((e) => e.classNum === c && e.slot <= 6)
                     .toSorted((a, b) => a.slot - b.slot)
                     .map((e) => (
-                      <li
-                        key={`${e.slot}:${e.defindex}`}
-                        className="flex items-center gap-2 text-[13px]"
-                      >
-                        {e.imageUrl && <img src={e.imageUrl} alt="" className="h-5 w-5" />}
-                        <Link
-                          to="/item/$defindex"
-                          params={{ defindex: e.defindex }}
-                          className="hover:underline"
-                          style={{ color: qualityColor(e.quality) }}
-                          title={qualityName(e.quality)}
-                        >
-                          {itemDisplayName(e)}
-                        </Link>
-                        <span className="ml-auto font-mono text-[10px] text-muted-foreground/60">
-                          {SLOT_NAMES[e.slot]}
-                        </span>
+                      <li key={`${e.slot}:${e.defindex}`} className="text-[13px]">
+                        <div className="flex items-center gap-2">
+                          {e.imageUrl && <img src={e.imageUrl} alt="" className="h-5 w-5" />}
+                          <Link
+                            to="/item/$defindex"
+                            params={{ defindex: e.defindex }}
+                            className="hover:underline"
+                            style={{ color: qualityColor(e.quality) }}
+                            title={qualityName(e.quality)}
+                          >
+                            {itemDisplayName(e)}
+                          </Link>
+                          <span className="ml-auto font-mono text-[10px] text-muted-foreground/60">
+                            {SLOT_NAMES[e.slot]}
+                          </span>
+                        </div>
+                        {e.quality === STRANGE_QUALITY && e.strangeKills > 0 && (
+                          <div className="pl-7 font-mono text-[10px] text-muted-foreground">
+                            {e.strangeKills.toLocaleString()} kills · {haleOwnPct(e.strangeKills).toFixed(1)}% to
+                            Hale's Own
+                          </div>
+                        )}
                       </li>
                     ))}
                 </ul>

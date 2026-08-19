@@ -57,6 +57,13 @@
       "when": 1787044012260,
       "tag": "0007_flat_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787160765397,
+      "tag": "0008_windy_viper",
+      "breakpoints": true
     }
   ]
 }

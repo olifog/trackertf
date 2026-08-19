@@ -24,10 +24,25 @@ const db = createDbFromEnv();
 const steam = new SteamClient({ apiKey, ratePerSecond: 1, onResult: record });
 const INTERVAL_MS = 5 * 60_000;
 
+// Populated Valve, populated community, and EMPTY community. We never query
+// empty Valve servers: \gametype\valve\noplayers\1 returns 10k+ phantom
+// matchmaking reservations and truncates, so a true empty-Valve count is
+// impossible. Empty community is bounded and meaningful (occupancy ratio).
 const SCAN_FILTERS = [
   "\\appid\\440\\gametype\\valve\\empty\\1",
   "\\appid\\440\\nor\\1\\gametype\\valve\\empty\\1",
+  "\\appid\\440\\nor\\1\\gametype\\valve\\noplayers\\1",
 ];
+
+/** sv_tags flags we count per bucket. Keys are the JS/DB column stems. */
+const TAG_FLAGS = {
+  alltalk: "alltalk",
+  nocrits: "nocrits",
+  respawntimes: "respawntimes",
+  maxplayers: "increased_maxplayers",
+  highlander: "highlander",
+} as const;
+type TagKey = keyof typeof TAG_FLAGS;
 
 async function scan(): Promise<void> {
   const servers = [];
@@ -56,33 +71,81 @@ async function scan(): Promise<void> {
   const scannedAt = new Date();
   scannedAt.setSeconds(0, 0);
 
-  const agg = new Map<
-    string,
-    {
-      map: string;
-      region: number;
-      official: boolean;
-      serverCount: number;
-      players: number;
-      bots: number;
-    }
-  >();
+  interface Bucket {
+    map: string;
+    region: number;
+    official: boolean;
+    serverCount: number;
+    players: number;
+    bots: number;
+    capacity: number;
+    tags: Record<TagKey, number>;
+  }
+  const zeroTags = (): Record<TagKey, number> => ({
+    alltalk: 0,
+    nocrits: 0,
+    respawntimes: 0,
+    maxplayers: 0,
+    highlander: 0,
+  });
+  const agg = new Map<string, Bucket>();
+  // Empty community servers, kept coarse (region only) to avoid per-map explosion.
+  const empty = new Map<number, { region: number; servers: number; capacity: number }>();
+
   for (const s of servers) {
-    const official = (s.gametype ?? "").split(",").includes("valve");
+    const tags = (s.gametype ?? "").split(",");
+    const official = tags.includes("valve");
+    const humans = Math.max(0, s.players - s.bots);
+    // Community server with no humans -> coarse empty aggregate. Valve servers
+    // (and any populated server) go to the per-map buckets.
+    if (!official && humans === 0) {
+      const region = s.region ?? 255;
+      const e = empty.get(region) ?? { region, servers: 0, capacity: 0 };
+      e.servers += 1;
+      e.capacity += s.max_players;
+      empty.set(region, e);
+      continue;
+    }
     const map = s.map.toLowerCase().slice(0, 64);
     const region = s.region ?? 255;
     const key = `${map}|${region}|${official}`;
-    const entry = agg.get(key) ?? { map, region, official, serverCount: 0, players: 0, bots: 0 };
+    const entry =
+      agg.get(key) ??
+      ({
+        map,
+        region,
+        official,
+        serverCount: 0,
+        players: 0,
+        bots: 0,
+        capacity: 0,
+        tags: zeroTags(),
+      } satisfies Bucket);
     entry.serverCount += 1;
-    entry.players += Math.max(0, s.players - s.bots);
+    entry.players += humans;
     entry.bots += s.bots;
+    entry.capacity += s.max_players;
+    for (const [key2, token] of Object.entries(TAG_FLAGS)) {
+      if (tags.includes(token)) entry.tags[key2 as TagKey] += 1;
+    }
     agg.set(key, entry);
   }
 
-  // keep volume sane: drop empty community map rows (dead server spam)
-  const rows = [...agg.values()]
-    .filter((r) => r.official || r.players > 0)
-    .map((r) => ({ scannedAt, ...r }));
+  const rows = [...agg.values()].map((r) => ({
+    scannedAt,
+    map: r.map,
+    region: r.region,
+    official: r.official,
+    serverCount: r.serverCount,
+    players: r.players,
+    bots: r.bots,
+    capacity: r.capacity,
+    alltalkServers: r.tags.alltalk,
+    nocritsServers: r.tags.nocrits,
+    respawntimesServers: r.tags.respawntimes,
+    maxplayersServers: r.tags.maxplayers,
+    highlanderServers: r.tags.highlander,
+  }));
 
   if (rows.length > 0) {
     for (let i = 0; i < rows.length; i += 1000) {
@@ -92,9 +155,17 @@ async function scan(): Promise<void> {
         .onConflictDoNothing();
     }
   }
+
+  const emptyRows = [...empty.values()].map((e) => ({ scannedAt, ...e }));
+  if (emptyRows.length > 0) {
+    await db.insert(schema.serverEmptySnapshots).values(emptyRows).onConflictDoNothing();
+  }
+
   const totals = rows.reduce((a, r) => a + r.players, 0);
+  const emptyCount = emptyRows.reduce((a, e) => a + e.servers, 0);
   console.log(
-    `scan ${scannedAt.toISOString()}: ${servers.length} servers, ${totals} players, ${rows.length} agg rows`,
+    `scan ${scannedAt.toISOString()}: ${servers.length} servers, ${totals} players, ` +
+      `${rows.length} agg rows, ${emptyCount} empty community servers`,
   );
 }
 

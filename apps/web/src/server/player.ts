@@ -23,6 +23,7 @@ export interface EquippedRow {
   slot: number;
   defindex: number;
   quality: number;
+  strangeKills: number;
   itemName: string | null;
   name: string | null;
   imageUrl: string | null;
@@ -102,7 +103,8 @@ export const fetchPlayer = createServerFn({ method: "GET" })
       .where(eq(schema.playerClassStats.steamid, data.steamid));
 
     const equipped = (await db.execute(sql`
-      select e.class_num, e.slot, e.defindex, e.quality, s.item_name, s.name, s.image_url
+      select e.class_num, e.slot, e.defindex, e.quality, e.strange_kills,
+             s.item_name, s.name, s.image_url
       from equipped_items e
       left join item_schema s using (defindex)
       where e.steamid = ${data.steamid}
@@ -128,6 +130,7 @@ export const fetchPlayer = createServerFn({ method: "GET" })
         slot: e["slot"] as number,
         defindex: e["defindex"] as number,
         quality: (e["quality"] as number | null) ?? 6,
+        strangeKills: (e["strange_kills"] as number | null) ?? 0,
         itemName: e["item_name"] as string | null,
         name: e["name"] as string | null,
         imageUrl: e["image_url"] as string | null,
@@ -231,6 +234,97 @@ export const fetchPlayerFriends = createServerFn({ method: "GET" })
     };
   });
 
+export interface FriendRankRow {
+  metric: "playtime" | "kills" | "points";
+  label: string;
+  /** 1-based rank among ranked friends (1 = best) */
+  rank: number;
+  /** raw value: hours for playtime, counts otherwise */
+  value: number;
+}
+
+export interface FriendRanksResponse {
+  /** true only when the player is rankable and has at least one ranked friend */
+  hasData: boolean;
+  /** number of ranked players in the friend population (incl. the player) */
+  total: number;
+  ranks: FriendRankRow[];
+}
+
+/**
+ * Ranks this player among their crawled friends (plus themself) on lifetime
+ * playtime / kills / points. Population mirrors the global leaderboards' filter
+ * (public persona, no VAC ban — see packages/db/src/boards.ts POP) but is scoped
+ * to the friend set. rank = 1 + (friends strictly ahead), matching SQL rank().
+ */
+export const fetchFriendRanks = createServerFn({ method: "GET" })
+  .validator(z.object({ steamid: z.string().regex(/^\d{17}$/) }))
+  .handler(async ({ data }): Promise<FriendRanksResponse> => {
+    const db = getDb();
+    const rows = (await db.execute(sql`
+      with friend_ids as (
+        select f ->> 'steamid' as steamid
+        from player_friends_raw r
+        cross join lateral jsonb_array_elements(r.payload) f
+        where r.steamid = ${data.steamid}
+        union
+        select ${data.steamid}
+      ),
+      pop as (
+        select c.steamid,
+          sum(c.playtime_seconds) as playtime,
+          sum(c.kills) as kills,
+          sum(c.points_scored) as points
+        from player_class_stats c
+        join players p using (steamid)
+        where c.steamid in (select steamid from friend_ids)
+          and p.personaname is not null and p.vac_banned = false
+        group by c.steamid
+      ),
+      me as (select * from pop where steamid = ${data.steamid})
+      select
+        (select count(*)::int from pop) as total,
+        (select playtime from me) as me_playtime,
+        (select kills from me) as me_kills,
+        (select points from me) as me_points,
+        (select (1 + count(*))::int from pop
+           where pop.playtime > (select playtime from me)) as rank_playtime,
+        (select (1 + count(*))::int from pop
+           where pop.kills > (select kills from me)) as rank_kills,
+        (select (1 + count(*))::int from pop
+           where pop.points > (select points from me)) as rank_points
+    `)) as unknown as Record<string, unknown>[];
+
+    const r = rows[0];
+    const total = Number(r?.["total"] ?? 0);
+    // rankable only when the player is in the population and has friends there
+    if (!r || r["me_playtime"] == null || total < 2) {
+      return { hasData: false, total, ranks: [] };
+    }
+
+    const ranks: FriendRankRow[] = [
+      {
+        metric: "playtime",
+        label: "Hours played",
+        rank: Number(r["rank_playtime"]),
+        value: Number(r["me_playtime"]) / 3600,
+      },
+      {
+        metric: "kills",
+        label: "Kills",
+        rank: Number(r["rank_kills"]),
+        value: Number(r["me_kills"]),
+      },
+      {
+        metric: "points",
+        label: "Points scored",
+        rank: Number(r["rank_points"]),
+        value: Number(r["me_points"]),
+      },
+    ];
+    return { hasData: true, total, ranks };
+  });
+
 /** Accepts a steamid64, a profile URL, or a vanity name → steamid64. */
 export const lookupPlayer = createServerFn({ method: "GET" })
   .validator(z.object({ query: z.string().trim().min(1).max(200) }))
@@ -266,4 +360,10 @@ export const playerFriendsQueryOptions = (steamid: string) =>
   queryOptions({
     queryKey: ["player-friends", steamid],
     queryFn: () => fetchPlayerFriends({ data: { steamid } }),
+  });
+
+export const friendRanksQueryOptions = (steamid: string) =>
+  queryOptions({
+    queryKey: ["friend-ranks", steamid],
+    queryFn: () => fetchFriendRanks({ data: { steamid } }),
   });

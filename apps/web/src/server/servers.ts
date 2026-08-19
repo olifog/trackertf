@@ -80,6 +80,22 @@ export interface ServerTotals {
   servers: number;
   officialPlayers: number;
   officialServers: number;
+  /** sum of max_players across populated servers (seat capacity) */
+  capacity: number;
+  /** empty community servers in the latest scan (Valve empties are unmeasurable) */
+  emptyCommunityServers: number;
+}
+
+/** Count of populated servers carrying a given gametype tag, latest scan. */
+export interface TagStat {
+  key: string;
+  count: number;
+}
+
+/** Community players grouped into a real continent (Valve/SDR excluded). */
+export interface ContinentRow {
+  continent: string;
+  players: number;
 }
 
 export interface ServerOverview {
@@ -91,6 +107,10 @@ export interface ServerOverview {
   byGamemode: GamemodeRow[];
   /** average concurrent players per UTC hour over the trailing 7 days */
   rushHour: RushHourPoint[];
+  /** gametype-tag prevalence across populated servers (mostly community) */
+  tags: TagStat[];
+  /** community players by continent (real region codes only; SDR excluded) */
+  byContinent: ContinentRow[];
 }
 
 const ZERO_TOTALS: ServerTotals = {
@@ -99,6 +119,8 @@ const ZERO_TOTALS: ServerTotals = {
   servers: 0,
   officialPlayers: 0,
   officialServers: 0,
+  capacity: 0,
+  emptyCommunityServers: 0,
 };
 
 const num = (v: unknown): number => (v == null ? 0 : Number(v));
@@ -119,6 +141,8 @@ export const fetchServerOverview = createServerFn({ method: "GET" }).handler(
         byMap: [],
         byGamemode: [],
         rushHour: [],
+        tags: [],
+        byContinent: [],
       };
     }
 
@@ -180,10 +204,52 @@ export const fetchServerOverview = createServerFn({ method: "GET" }).handler(
         sum(bots)::int bots,
         sum(server_count)::int servers,
         coalesce(sum(players) filter (where official), 0)::int official_players,
-        coalesce(sum(server_count) filter (where official), 0)::int official_servers
+        coalesce(sum(server_count) filter (where official), 0)::int official_servers,
+        coalesce(sum(capacity), 0)::int capacity,
+        coalesce(sum(alltalk_servers), 0)::int alltalk,
+        coalesce(sum(nocrits_servers), 0)::int nocrits,
+        coalesce(sum(respawntimes_servers), 0)::int respawntimes,
+        coalesce(sum(maxplayers_servers), 0)::int maxplayers,
+        coalesce(sum(highlander_servers), 0)::int highlander
       from server_snapshots, latest
       where scanned_at = latest.t
     `)) as unknown as [Record<string, unknown> | undefined];
+
+    // Empty community servers: their own table (Valve empties excluded — the
+    // master list truncates to 10k phantom reservations, so no true count).
+    const [emptyRaw] = (await db.execute(sql`
+      with latest as (select max(scanned_at) t from server_empty_snapshots)
+      select coalesce(sum(servers), 0)::int servers
+      from server_empty_snapshots, latest
+      where scanned_at = latest.t
+    `)) as unknown as [Record<string, unknown> | undefined];
+
+    // Community players by continent — only real region codes (0-7). Valve
+    // casual is SDR-hidden (region 255) and cannot be geolocated, so it's
+    // deliberately excluded rather than dumped into a fake "World" bucket.
+    const byContinentRaw = (await db.execute(sql`
+      with latest as (select max(scanned_at) t from server_snapshots)
+      select
+        case region
+          when 0 then 'North America' when 1 then 'North America'
+          when 2 then 'South America' when 3 then 'Europe'
+          when 4 then 'Asia' when 5 then 'Oceania'
+          when 6 then 'Middle East' when 7 then 'Africa'
+        end continent,
+        sum(players)::int players
+      from server_snapshots, latest
+      where scanned_at = latest.t and official = false and region between 0 and 7
+      group by continent
+      order by players desc
+    `)) as unknown as Record<string, unknown>[];
+
+    const tags: TagStat[] = [
+      { key: "alltalk", count: num(totalsRaw?.["alltalk"]) },
+      { key: "nocrits", count: num(totalsRaw?.["nocrits"]) },
+      { key: "respawntimes", count: num(totalsRaw?.["respawntimes"]) },
+      { key: "maxplayers", count: num(totalsRaw?.["maxplayers"]) },
+      { key: "highlander", count: num(totalsRaw?.["highlander"]) },
+    ];
 
     return {
       scannedAt,
@@ -193,7 +259,13 @@ export const fetchServerOverview = createServerFn({ method: "GET" }).handler(
         servers: num(totalsRaw?.["servers"]),
         officialPlayers: num(totalsRaw?.["official_players"]),
         officialServers: num(totalsRaw?.["official_servers"]),
+        capacity: num(totalsRaw?.["capacity"]),
+        emptyCommunityServers: num(emptyRaw?.["servers"]),
       },
+      tags,
+      byContinent: byContinentRaw
+        .filter((r) => r["continent"] != null)
+        .map((r) => ({ continent: String(r["continent"]), players: num(r["players"]) })),
       byRegion: byRegionRaw.map((r) => ({
         region: num(r["region"]),
         players: num(r["players"]),

@@ -277,7 +277,7 @@ function MatchesPage() {
         <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
           The sampler repeatedly queries populated Valve casual servers and records each player's
           score over time. Observed points/hour is measured directly as{" "}
-          <span className="font-mono text-xs">(last score - first score) / hours observed</span> —
+          <span className="font-mono text-xs">(last score - first score) / hours observed</span>:
           the real scoring pace on casual, not the farmable Valve lifetime stat. Names are in-game
           display names, not linked Steam profiles.
         </p>

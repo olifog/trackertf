@@ -237,7 +237,14 @@ export const crawlFrontier = pgTable(
   (t) => [index("crawl_frontier_dequeue_idx").on(t.priority, t.enqueuedAt)],
 );
 
-/** One row per (scan, map, region, official-or-not) — aggregated, not per-server. */
+/** One row per (scan, map, region, official-or-not) — aggregated, not per-server.
+ * Only servers with human players are recorded here (empty community servers go
+ * in server_empty_snapshots; empty Valve servers are unmeasurable — the master
+ * list truncates at 10k phantom matchmaking reservations). `capacity` is the sum
+ * of max_players across the bucket's servers, so seat-fill = players / capacity.
+ * The *_servers columns count how many of the bucket's servers carry each
+ * gametype tag (parsed from sv_tags); all default 0 so historical rows are
+ * unaffected. */
 export const serverSnapshots = pgTable(
   "server_snapshots",
   {
@@ -249,10 +256,36 @@ export const serverSnapshots = pgTable(
     serverCount: integer().notNull(),
     players: integer().notNull(),
     bots: integer().notNull(),
+    /** sum of max_players across the bucket's servers (seat capacity) */
+    capacity: integer().notNull().default(0),
+    /** count of servers in the bucket carrying each sv_tags flag */
+    alltalkServers: integer().notNull().default(0),
+    nocritsServers: integer().notNull().default(0),
+    respawntimesServers: integer().notNull().default(0),
+    maxplayersServers: integer().notNull().default(0),
+    highlanderServers: integer().notNull().default(0),
   },
   (t) => [
     primaryKey({ columns: [t.scannedAt, t.map, t.region, t.official] }),
     index("server_snapshots_scanned_at_idx").on(t.scannedAt),
+  ],
+);
+
+/** Empty community servers per (scan, region), kept coarse (no map dimension) to
+ * avoid the per-map row explosion of thousands of idle community maps. Lets us
+ * report the empty-vs-populated ratio for community servers. Valve empties are
+ * deliberately excluded (master-list truncation makes their count meaningless). */
+export const serverEmptySnapshots = pgTable(
+  "server_empty_snapshots",
+  {
+    scannedAt: timestamp({ withTimezone: true }).notNull(),
+    region: smallint().notNull(),
+    servers: integer().notNull(),
+    capacity: integer().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.scannedAt, t.region] }),
+    index("server_empty_snapshots_scanned_at_idx").on(t.scannedAt),
   ],
 );
 
