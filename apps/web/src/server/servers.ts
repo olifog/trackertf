@@ -161,7 +161,7 @@ export const fetchServerOverview = createServerFn({ method: "GET" }).handler(
     `)) as unknown as Record<string, unknown>[];
 
     const rushHourRaw = (await db.execute(sql`
-      select extract(hour from scanned_at)::int hour,
+      select extract(hour from scanned_at)::int as hour,
         round(avg(p))::int players
       from (
         select scanned_at, sum(players) p
@@ -169,8 +169,8 @@ export const fetchServerOverview = createServerFn({ method: "GET" }).handler(
         where scanned_at > now() - interval '7 days'
         group by scanned_at
       ) s
-      group by hour
-      order by hour
+      group by 1
+      order by 1
     `)) as unknown as Record<string, unknown>[];
 
     const [totalsRaw] = (await db.execute(sql`
