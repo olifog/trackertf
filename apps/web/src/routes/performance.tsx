@@ -24,6 +24,7 @@ const DEFAULT_FILTERS = {
   metric: "points_hr",
   class: -1,
   minutes: 0,
+  reskins: true,
 } as const;
 
 const CLASSES = [
@@ -200,8 +201,6 @@ function PerformancePage() {
   });
 
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.rows) ?? [], [query.data]);
-  // the ranked list is metric-desc, so row 0 is the ceiling for the dim bars
-  const topValue = rows[0]?.value ?? 0;
   const metric = METRICS[search.metric];
 
   // infinite scroll: sentinel below the table pulls the next page into view
@@ -225,8 +224,9 @@ function PerformancePage() {
       <div className="flex items-baseline justify-between gap-4">
         <h1 className="font-heading text-2xl font-bold">Weapon performance</h1>
         <p className="max-w-md text-right text-[11px] text-muted-foreground">
-          Correlational. Each value is the average {metric.label.toLowerCase()} of players who equip
-          the item, not the weapon's isolated effect.
+          Correlational. Each value is the median {metric.label.toLowerCase()} of players who equip
+          the item, not the weapon's isolated effect. Median + a per-player cap keep farming-server
+          outliers out.
         </p>
       </div>
 
@@ -250,6 +250,27 @@ function PerformancePage() {
             ))}
           </Segmented>
         </FilterRow>
+
+        {search.subject === "items" && (
+          <FilterRow label="Reskins">
+            <Segmented>
+              <Segment
+                active={search.reskins}
+                patch={{ reskins: true }}
+                title="Fold cosmetic reskins into one weapon group"
+              >
+                Combined
+              </Segment>
+              <Segment
+                active={!search.reskins}
+                patch={{ reskins: false }}
+                title="Show each reskin as its own item"
+              >
+                Separate
+              </Segment>
+            </Segmented>
+          </FilterRow>
+        )}
 
         <FilterRow label="Class">
           <Segmented>
@@ -314,8 +335,9 @@ function PerformancePage() {
                       · {Math.round(row.avgHours).toLocaleString()}h avg
                     </span>
                   </TableCell>
-                  <TableCell className="py-1">
-                    <MetricBar value={row.value} top={topValue} unit={metric.unit} />
+                  <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+                    {formatMetric(row.value)}
+                    <span className="ml-1 text-[10px] text-muted-foreground/60">{metric.unit}</span>
                   </TableCell>
                 </TableRow>
               ))}
@@ -372,20 +394,3 @@ function Members({ members }: { members: PerfItemInfo[] }) {
   );
 }
 
-function MetricBar({ value, top, unit }: { value: number; top: number; unit: string }) {
-  const pct = top > 0 ? (value / top) * 100 : 0;
-  return (
-    <div className="flex items-center justify-end gap-2">
-      <div className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full bg-secondary">
-        <div
-          className="h-full rounded-full bg-primary"
-          style={{ width: `${Math.min(pct, 100)}%` }}
-        />
-      </div>
-      <span className="w-24 shrink-0 text-right font-mono text-sm tabular-nums">
-        {formatMetric(value)}
-        <span className="ml-1 text-[10px] text-muted-foreground/60">{unit}</span>
-      </span>
-    </div>
-  );
-}

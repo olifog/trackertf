@@ -1,6 +1,13 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts";
 import { z } from "zod";
+import {
+  ChartContainer,
+  type ChartConfig,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "#/components/ui/chart";
 import {
   Table,
   TableBody,
@@ -11,6 +18,7 @@ import {
 } from "#/components/ui/table";
 import { formatAgo } from "#/lib/tf2";
 import {
+  type GamemodeKey,
   serverOverviewQueryOptions,
   serverTrendQueryOptions,
   type TrendPoint,
@@ -38,8 +46,9 @@ export const Route = createFileRoute("/servers")({
 
 /**
  * Steam master-server region codes (approximate — GetServerList reports the
- * master-list region, not a geolocated one). 255 = "rest of the world" / SDR
- * servers with no region. Unknown codes render with their raw number.
+ * master-list region, not a geolocated one). 255 = "rest of the world"; almost
+ * all post-2023 Valve servers land here because Steam Datagram Relay hides
+ * their real address, so this bucket is labelled honestly rather than "World".
  */
 const REGION_NAMES: Record<number, string> = {
   0: "US East",
@@ -50,12 +59,11 @@ const REGION_NAMES: Record<number, string> = {
   5: "Australia",
   6: "Middle East",
   7: "Africa",
-  255: "World / SDR",
 };
 
 function regionLabel(code: number): string {
-  // ClickHouse stores region as Int8, so 255 can arrive as -1; treat both as World.
-  if (code === 255 || code < 0) return "World / SDR";
+  // ClickHouse stores region as Int8, so 255 can arrive as -1; treat both as SDR.
+  if (code === 255 || code < 0) return "SDR / unknown";
   return REGION_NAMES[code] ?? `Region ${code}`;
 }
 
@@ -63,9 +71,46 @@ function displayMap(map: string): string {
   return map || "(unknown)";
 }
 
+const GAMEMODE_LABELS: Record<GamemodeKey, string> = {
+  payload: "Payload",
+  cp: "Control Point",
+  koth: "King of the Hill",
+  ctf: "Capture the Flag",
+  mvm: "Mann vs. Machine",
+  pd: "Player Destruction",
+  other: "Other / Community",
+};
+
+const GAMEMODE_COLORS: Record<GamemodeKey, string> = {
+  payload: "var(--chart-1)",
+  cp: "var(--chart-2)",
+  koth: "var(--chart-3)",
+  ctf: "var(--chart-4)",
+  mvm: "var(--chart-5)",
+  pd: "var(--primary)",
+  other: "var(--muted-foreground)",
+};
+
+const GAMEMODE_ORDER: GamemodeKey[] = ["payload", "cp", "koth", "ctf", "mvm", "pd", "other"];
+
+const trendConfig = Object.fromEntries(
+  GAMEMODE_ORDER.map((k) => [k, { label: GAMEMODE_LABELS[k], color: GAMEMODE_COLORS[k] }]),
+) satisfies ChartConfig;
+
+const rushConfig = {
+  players: { label: "Avg players", color: "var(--chart-1)" },
+} satisfies ChartConfig;
+
+function fmtAxis(unixSec: number, range: TrendRange): string {
+  const d = new Date(unixSec * 1000);
+  return range === "24h"
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
 function Segmented({ children }: { children: React.ReactNode }) {
   return (
-    <div className="inline-flex overflow-hidden rounded-md border divide-x divide-border">
+    <div className="inline-flex divide-x divide-border overflow-hidden rounded-md border">
       {children}
     </div>
   );
@@ -107,79 +152,141 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
-/** compact two-line SVG sparkline: total players (primary) + official (chart-2) */
-function Sparkline({ points, range }: { points: TrendPoint[]; range: TrendRange }) {
-  const W = 720;
-  const H = 120;
-  const PAD = 4;
+function TrendChart({ points, range }: { points: TrendPoint[]; range: TrendRange }) {
   if (points.length < 2) {
     return (
-      <div className="flex h-[120px] items-center justify-center text-sm text-muted-foreground">
+      <div className="flex h-[260px] items-center justify-center text-sm text-muted-foreground">
         Not enough history yet. The scanner records a point every 5 minutes.
       </div>
     );
   }
-  const max = Math.max(1, ...points.map((p) => p.players));
-  const t0 = points[0]?.t ?? 0;
-  const t1 = points[points.length - 1]?.t ?? t0 + 1;
-  const span = Math.max(1, t1 - t0);
-  const x = (t: number) => PAD + ((t - t0) / span) * (W - 2 * PAD);
-  const y = (v: number) => PAD + (1 - v / max) * (H - 2 * PAD);
-  const line = (key: keyof TrendPoint) =>
-    points.map((p) => `${x(p.t).toFixed(1)},${y(p[key] as number).toFixed(1)}`).join(" ");
-  const area = `${x(t0).toFixed(1)},${(H - PAD).toFixed(1)} ${line("players")} ${x(t1).toFixed(1)},${(H - PAD).toFixed(1)}`;
-  const current = points[points.length - 1];
-
   return (
-    <div>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        className="h-[120px] w-full"
-        role="img"
-        aria-label={`Player count over the last ${range === "24h" ? "24 hours" : "7 days"}`}
-      >
-        <polygon points={area} className="fill-primary/10" />
-        <polyline
-          points={line("players")}
-          fill="none"
-          className="stroke-primary"
-          strokeWidth={1.5}
-          vectorEffect="non-scaling-stroke"
+    <ChartContainer config={trendConfig} className="h-[260px] w-full">
+      <AreaChart data={points} margin={{ left: 4, right: 8, top: 8 }}>
+        <defs>
+          {GAMEMODE_ORDER.map((k) => (
+            <linearGradient key={k} id={`fill-${k}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor={GAMEMODE_COLORS[k]} stopOpacity={0.7} />
+              <stop offset="95%" stopColor={GAMEMODE_COLORS[k]} stopOpacity={0.05} />
+            </linearGradient>
+          ))}
+        </defs>
+        <CartesianGrid vertical={false} />
+        <XAxis
+          dataKey="t"
+          tickLine={false}
+          axisLine={false}
+          tickMargin={8}
+          minTickGap={40}
+          tickFormatter={(v) => fmtAxis(Number(v), range)}
         />
-        <polyline
-          points={line("official")}
-          fill="none"
-          className="stroke-chart-2"
-          strokeWidth={1.5}
-          vectorEffect="non-scaling-stroke"
+        <YAxis
+          tickLine={false}
+          axisLine={false}
+          width={44}
+          tickFormatter={(v) => Number(v).toLocaleString()}
         />
-      </svg>
-      <div className="mt-1 flex justify-between font-mono text-[11px] text-muted-foreground">
-        <span>{fmtTick(t0, range)}</span>
-        <span className="text-foreground">
-          peak {max.toLocaleString()} · now {(current?.players ?? 0).toLocaleString()}
-        </span>
-        <span>{fmtTick(t1, range)}</span>
-      </div>
-    </div>
+        <ChartTooltip
+          content={
+            <ChartTooltipContent
+              labelFormatter={(v) => fmtAxis(Number(v), range)}
+              indicator="dot"
+            />
+          }
+        />
+        {GAMEMODE_ORDER.map((k) => (
+          <Area
+            key={k}
+            dataKey={k}
+            type="monotone"
+            stackId="players"
+            stroke={GAMEMODE_COLORS[k]}
+            fill={`url(#fill-${k})`}
+            strokeWidth={1.5}
+          />
+        ))}
+      </AreaChart>
+    </ChartContainer>
   );
 }
 
-function fmtTick(unixSec: number, range: TrendRange): string {
-  const d = new Date(unixSec * 1000);
-  return range === "24h"
-    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleDateString([], { month: "short", day: "numeric" });
+function GamemodePie({ data }: { data: { gamemode: GamemodeKey; players: number }[] }) {
+  const slices = data.filter((d) => d.players > 0);
+  if (slices.length === 0) {
+    return (
+      <div className="flex h-[260px] items-center justify-center text-sm text-muted-foreground">
+        No players in the latest scan.
+      </div>
+    );
+  }
+  const config = Object.fromEntries(
+    slices.map((d) => [d.gamemode, { label: GAMEMODE_LABELS[d.gamemode] }]),
+  ) satisfies ChartConfig;
+  return (
+    <ChartContainer config={config} className="mx-auto aspect-square h-[260px]">
+      <PieChart>
+        <ChartTooltip
+          content={<ChartTooltipContent nameKey="gamemode" hideLabel />}
+        />
+        <Pie data={slices} dataKey="players" nameKey="gamemode" innerRadius={55} strokeWidth={2}>
+          {slices.map((d) => (
+            <Cell key={d.gamemode} fill={GAMEMODE_COLORS[d.gamemode]} stroke="var(--background)" />
+          ))}
+        </Pie>
+      </PieChart>
+    </ChartContainer>
+  );
+}
+
+function RushHourChart({ data }: { data: { hour: number; players: number }[] }) {
+  if (data.length === 0) {
+    return (
+      <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+        Not enough history yet.
+      </div>
+    );
+  }
+  return (
+    <ChartContainer config={rushConfig} className="h-[220px] w-full">
+      <BarChart data={data} margin={{ left: 4, right: 8, top: 8 }}>
+        <CartesianGrid vertical={false} />
+        <XAxis
+          dataKey="hour"
+          tickLine={false}
+          axisLine={false}
+          tickMargin={8}
+          interval={1}
+          tickFormatter={(v) => `${String(v).padStart(2, "0")}:00`}
+        />
+        <YAxis
+          tickLine={false}
+          axisLine={false}
+          width={44}
+          tickFormatter={(v) => Number(v).toLocaleString()}
+        />
+        <ChartTooltip
+          content={
+            <ChartTooltipContent
+              labelFormatter={(v) => `${String(v).padStart(2, "0")}:00 UTC`}
+              indicator="dot"
+            />
+          }
+        />
+        <Bar dataKey="players" fill="var(--color-players)" radius={[3, 3, 0, 0]} />
+      </BarChart>
+    </ChartContainer>
+  );
 }
 
 function ServersPage() {
   const search = Route.useSearch();
   const { data: overview } = useSuspenseQuery(serverOverviewQueryOptions());
   const { data: trend } = useSuspenseQuery(serverTrendQueryOptions(search.range));
-  const { totals, byRegion, byMap } = overview;
+  const { totals, byRegion, byMap, byGamemode, rushHour } = overview;
   const communityPlayers = Math.max(0, totals.players - totals.officialPlayers);
   const communityServers = Math.max(0, totals.servers - totals.officialServers);
+  const avgFill =
+    totals.officialServers > 0 ? totals.officialPlayers / totals.officialServers : 0;
 
   return (
     <div className="space-y-6">
@@ -207,7 +314,7 @@ function ServersPage() {
             <Stat
               label="official players"
               value={totals.officialPlayers.toLocaleString()}
-              sub="Valve casual / MvM"
+              sub={`${avgFill.toFixed(1)} avg / server`}
             />
             <Stat
               label="community players"
@@ -223,7 +330,10 @@ function ServersPage() {
 
           <div className="space-y-3 rounded-lg border bg-card/50 p-4">
             <div className="flex items-center justify-between">
-              <h2 className="font-heading text-lg font-semibold">Players over time</h2>
+              <div>
+                <h2 className="font-heading text-lg font-semibold">Players over time</h2>
+                <p className="text-xs text-muted-foreground">concurrent players, stacked by gamemode</p>
+              </div>
               <Segmented>
                 <Segment active={search.range === "24h"} range="24h">
                   24h
@@ -231,16 +341,42 @@ function ServersPage() {
                 <Segment active={search.range === "7d"} range="7d">
                   7d
                 </Segment>
+                <Segment active={search.range === "14d"} range="14d">
+                  14d
+                </Segment>
               </Segmented>
             </div>
-            <Sparkline points={trend} range={search.range} />
-            <div className="flex gap-4 font-mono text-[11px] text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <span className="h-0.5 w-4 bg-primary" /> total
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-0.5 w-4 bg-chart-2" /> official
-              </span>
+            <TrendChart points={trend} range={search.range} />
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div className="rounded-lg border bg-card/50 p-4">
+              <h2 className="mb-2 font-heading text-lg font-semibold">Players by gamemode</h2>
+              <GamemodePie data={byGamemode} />
+              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1">
+                {byGamemode
+                  .filter((g) => g.players > 0)
+                  .map((g) => (
+                    <div key={g.gamemode} className="flex items-center gap-1.5 text-xs">
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
+                        style={{ backgroundColor: GAMEMODE_COLORS[g.gamemode] }}
+                      />
+                      <span className="text-muted-foreground">{GAMEMODE_LABELS[g.gamemode]}</span>
+                      <span className="ml-auto font-mono tabular-nums">
+                        {g.players.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            <div className="rounded-lg border bg-card/50 p-4">
+              <h2 className="font-heading text-lg font-semibold">Rush hour</h2>
+              <p className="mb-2 text-xs text-muted-foreground">
+                average concurrent players by hour (UTC, trailing 7 days)
+              </p>
+              <RushHourChart data={rushHour} />
             </div>
           </div>
 
@@ -331,7 +467,8 @@ function ServersPage() {
           <p className="text-xs text-muted-foreground">
             Counts are the latest 5-minute scan of GetServerList. "Official" is the Valve casual/MvM
             pool (the "valve" gametype tag); empty community servers are dropped at scan time.
-            Regions are Steam master-server codes, which are approximate.
+            Regions are Steam master-server codes — post-2023 Steam Datagram Relay hides most Valve
+            servers' real location, so they fall into "SDR / unknown" rather than a continent.
           </p>
         </>
       )}

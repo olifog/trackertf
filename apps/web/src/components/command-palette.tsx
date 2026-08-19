@@ -4,6 +4,7 @@ import {
   ArrowRightIcon,
   ChartBarIcon,
   GaugeIcon,
+  GlobeIcon,
   LayersIcon,
   RadioIcon,
   ServerIcon,
@@ -31,6 +32,7 @@ const PAGES = [
   { label: "Performance", to: "/performance", icon: GaugeIcon },
   { label: "Leaderboards", to: "/leaderboards", icon: TrophyIcon },
   { label: "Servers", to: "/servers", icon: ServerIcon },
+  { label: "Ecosystem", to: "/ecosystem", icon: GlobeIcon },
   { label: "Matches", to: "/matches", icon: RadioIcon },
   { label: "Health", to: "/health", icon: ActivityIcon },
 ] as const;

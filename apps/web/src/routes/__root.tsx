@@ -97,6 +97,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
             <NavLink to="/performance">Performance</NavLink>
             <NavLink to="/leaderboards">Leaderboards</NavLink>
             <NavLink to="/servers">Servers</NavLink>
+            <NavLink to="/ecosystem">Ecosystem</NavLink>
             <NavLink to="/health">Health</NavLink>
             <CommandPalette />
             <a

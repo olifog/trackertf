@@ -434,10 +434,10 @@ function ComboRowView({ row, rank, compare }: { row: ComboRow; rank: number; com
       {compare ? (
         <>
           <TableCell className="py-1">
-            <UsageBar usage={row.usageA} count={row.countA} />
+            <UsagePct usage={row.usageA} count={row.countA} />
           </TableCell>
           <TableCell className="py-1">
-            <UsageBar usage={row.usageB ?? 0} count={row.countB ?? 0} />
+            <UsagePct usage={row.usageB ?? 0} count={row.countB ?? 0} />
           </TableCell>
           <TableCell className="py-1 text-right">
             <DeltaCell delta={row.delta ?? 0} />
@@ -449,7 +449,7 @@ function ComboRowView({ row, rank, compare }: { row: ComboRow; rank: number; com
             {row.countA.toLocaleString()}
           </TableCell>
           <TableCell className="py-1">
-            <UsageBar usage={row.usageA} />
+            <UsagePct usage={row.usageA} />
           </TableCell>
         </>
       )}
@@ -457,20 +457,14 @@ function ComboRowView({ row, rank, compare }: { row: ComboRow; rank: number; com
   );
 }
 
-function UsageBar({ usage, count }: { usage: number; count?: number }) {
+/** usage percentage, plus the raw player count in compare mode (no bar — the
+ * bars overlapped the labels and were near-empty for most combos) */
+function UsagePct({ usage, count }: { usage: number; count?: number }) {
   return (
-    <div className="flex items-center justify-end gap-2">
-      <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-secondary">
-        <div
-          className="h-full rounded-full bg-primary"
-          style={{ width: `${Math.min(usage * 100, 100)}%` }}
-        />
-      </div>
-      <span className="w-12 shrink-0 text-right font-mono text-sm tabular-nums">
-        {(usage * 100).toFixed(1)}%
-      </span>
+    <div className="flex items-center justify-end gap-3 font-mono tabular-nums">
+      <span className="text-sm">{(usage * 100).toFixed(1)}%</span>
       {count !== undefined && (
-        <span className="w-14 shrink-0 text-right font-mono text-[11px] text-muted-foreground/60 tabular-nums">
+        <span className="w-14 shrink-0 text-right text-[11px] text-muted-foreground/60">
           {count.toLocaleString()}
         </span>
       )}

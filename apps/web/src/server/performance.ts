@@ -19,42 +19,59 @@ const snapTo = (buckets: readonly number[]) => (v: number) =>
  * (fixed strings, never user input) so it is safe to inline. Formulas mirror
  * the crawler's recomputeWeaponStats (`::real * 60 / playtime_seconds` etc.),
  * extended with the per-hour variants.
+ *
+ * `cap` is a hard per-player sanity ceiling for the rate — a backstop against
+ * farming servers (idle/bot servers push lifetime kills/hr into the tens of
+ * thousands, e.g. an observed 28,062 kills/hr). Any single player whose rate
+ * exceeds `cap` is dropped from the sample entirely. The caps are set an order
+ * of magnitude above what a real elite casual player sustains over their whole
+ * lifetime, so legitimate outliers survive and only physically-impossible farm
+ * values are cut. The primary robustness comes from aggregating with the MEDIAN
+ * rather than the mean (see queryItems/queryCombos) — the cap only guards the
+ * degenerate case of a weapon equipped predominantly by farmers.
  */
 export const METRICS = {
   points_hr: {
     label: "Points/hr",
     unit: "pts/hr",
     expr: "toFloat64(p.points_scored) * 3600 / p.playtime_seconds",
+    cap: 5_000,
   },
   points_min: {
     label: "Points/min",
     unit: "pts/min",
     expr: "toFloat64(p.points_scored) * 60 / p.playtime_seconds",
+    cap: 100,
   },
   kills_hr: {
     label: "Kills/hr",
     unit: "kills/hr",
     expr: "toFloat64(p.kills) * 3600 / p.playtime_seconds",
+    cap: 500,
   },
   damage_min: {
     label: "Damage/min",
     unit: "dmg/min",
     expr: "toFloat64(p.damage_dealt) * 60 / p.playtime_seconds",
+    cap: 10_000,
   },
   assists_hr: {
     label: "Assists/hr",
     unit: "ast/hr",
     expr: "toFloat64(p.kill_assists) * 3600 / p.playtime_seconds",
+    cap: 500,
   },
   captures_hr: {
     label: "Captures/hr",
     unit: "caps/hr",
     expr: "toFloat64(p.captures) * 3600 / p.playtime_seconds",
+    cap: 500,
   },
   dominations_hr: {
     label: "Dominations/hr",
     unit: "doms/hr",
     expr: "toFloat64(p.dominations) * 3600 / p.playtime_seconds",
+    cap: 500,
   },
 } as const;
 
@@ -74,6 +91,12 @@ export const performanceFiltersSchema = z.object({
   class: z.number().int().min(-1).max(9).catch(-1).default(-1),
   /** min lifetime minutes played, snapped to HOURS_BUCKETS */
   minutes: z.number().int().nonnegative().catch(0).default(0).transform(snapTo(HOURS_BUCKETS)),
+  /**
+   * combine reskins (default) folds cosmetic variants into one weapon group via
+   * cgid; false splits them out per real defindex. Only affects `subject:items`
+   * — combos always merge (un-merging needs a per-weapon-defindex CH column).
+   */
+  reskins: z.boolean().catch(true).default(true),
 });
 export type PerformanceFilters = z.infer<typeof performanceFiltersSchema>;
 
@@ -114,7 +137,8 @@ const MIN_PLAYTIME_SECONDS = 36_000;
 const MIN_PLAYERS = 5;
 
 interface RawItemRow {
-  cgid: number;
+  /** grouping key: cgid when reskins merge, real defindex when split */
+  id: number;
   value: number;
   players: number;
   avg_hours: number;
@@ -146,6 +170,7 @@ function baseParams(filters: PerformanceFilters, offset: number): Record<string,
     minPlaytime: MIN_PLAYTIME_SECONDS,
     minMinutes: filters.minutes,
     minPlayers: MIN_PLAYERS,
+    cap: METRICS[filters.metric].cap,
     limit: PAGE_SIZE + 1,
     offset,
     ...(filters.class === -1 ? {} : { class: filters.class }),
@@ -153,18 +178,24 @@ function baseParams(filters: PerformanceFilters, offset: number): Record<string,
 }
 
 /**
- * ITEM PERFORMANCE: for each weapon group (cgid) on the selected class(es),
- * the average of the chosen metric over the players who equip it. `cgid`
- * already folds the pan family into per-class stock melees (done in the
- * syncer), so no remap is needed here.
+ * ITEM PERFORMANCE: for each weapon group on the selected class(es), the MEDIAN
+ * of the chosen metric over the players who equip it. Median (not mean) is the
+ * outlier defense — a handful of farming-server players can't drag it, whereas
+ * they wrecked the old mean. A hard per-player `cap` additionally drops
+ * physically-impossible farm rates before aggregation (see METRICS).
+ *
+ * Grouping key is `cgid` when reskins are combined (default) — cgid already
+ * folds the pan family into per-class stock melees in the syncer — or the real
+ * `defindex` when the user splits reskins out.
  */
 async function queryItems(filters: PerformanceFilters, offset: number): Promise<ComboAgg[]> {
   const metric = METRICS[filters.metric].expr;
+  const groupCol = filters.reskins ? "e.cgid" : "e.defindex";
   const rows = await chQuery<RawItemRow>(
     getCh(),
     `select
-       e.cgid as cgid,
-       avg(${metric}) as value,
+       ${groupCol} as id,
+       quantileExact(0.5)(${metric}) as value,
        toUInt32(count(distinct e.steamid)) as players,
        avg(p.playtime_seconds) / 3600 as avg_hours
      from equipped e
@@ -172,15 +203,16 @@ async function queryItems(filters: PerformanceFilters, offset: number): Promise<
      where e.slot <= 6
        and p.playtime_seconds >= {minPlaytime:UInt32}
        and p.lifetime_min >= {minMinutes:UInt32}
+       and (${metric}) <= {cap:Float64}
        ${classClause(filters.class, "e.class_num")}
-     group by e.cgid
+     group by ${groupCol}
      having players >= {minPlayers:UInt32}
-     order by value desc, cgid asc
+     order by value desc, id asc
      limit {limit:UInt32} offset {offset:UInt32}`,
     baseParams(filters, offset),
   );
   return rows.map((r) => ({
-    members: [r.cgid],
+    members: [r.id],
     value: r.value,
     players: r.players,
     avg_hours: r.avg_hours,
@@ -189,9 +221,15 @@ async function queryItems(filters: PerformanceFilters, offset: number): Promise<
 
 /**
  * COMBO PERFORMANCE: ARRAY JOIN a player's weapon_gids against itself to form
- * every 2- or 3-weapon combo they run, join to player_class, average the
- * metric over players who run that whole combo. The `a < b (< c)` guard keeps
- * each unordered combo once.
+ * every 2- or 3-weapon combo they run, join to player_class, take the MEDIAN of
+ * the metric over players who run that whole combo (same farm-proofing as
+ * queryItems — median + per-player cap). The `a < b (< c)` guard keeps each
+ * unordered combo once.
+ *
+ * Combos always reskin-merge: weapon_gids is a group-id array with no raw
+ * defindexes, so there is nothing to split on.
+ * TODO(reskin-unmerge combos): needs a weapon_defindex Array on the CH loadout
+ * table (+ syncer populate + re-sync) before a split view is possible.
  */
 async function queryCombos(
   filters: PerformanceFilters,
@@ -208,7 +246,7 @@ async function queryCombos(
     getCh(),
     `select
        ${members} as members,
-       avg(${metric}) as value,
+       quantileExact(0.5)(${metric}) as value,
        toUInt32(count(distinct l.steamid)) as players,
        avg(p.playtime_seconds) / 3600 as avg_hours
      from loadout l
@@ -219,6 +257,7 @@ async function queryCombos(
      where ${guard}
        and p.playtime_seconds >= {minPlaytime:UInt32}
        and p.lifetime_min >= {minMinutes:UInt32}
+       and (${metric}) <= {cap:Float64}
        ${classClause(filters.class, "l.class_num")}
      group by ${groupCols}
      having players >= {minPlayers:UInt32}
