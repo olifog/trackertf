@@ -229,26 +229,25 @@ export function boardCountSql(def: BoardDef): string {
 }
 
 /**
- * One query over player_class_stats producing the player's rank, participant
- * count and value on every class-stat board (rate boards restricted to their
- * playtime threshold before ranking; kind carries the ":<N>h" suffix so
- * "metric:scope:kind" is the board key). scope 0 = overall. The hours board
- * needs a second, players-only query — see fetchPlayerRanks in the web app.
+ * CTE chain (`pop`, `scoped`) shared by the player-rank query. `scoped` holds
+ * one row per (player, scope) with every metric pre-aggregated — scope 0 =
+ * overall, scope N = class N. Columns are aliased to the metric names.
+ *
+ * The caller adds a `me` CTE (this player's `scoped` rows, filtered by steamid)
+ * and the aggregate in playerRanksAggSql() to derive the player's rank on every
+ * board — see fetchPlayerRanks. The hours board needs a separate players-only
+ * query (hoursRankSql).
+ *
+ * NB: this deliberately does NOT explode the population into one row per board
+ * (metric×scope×kind ≈ 18 non-null cells per player → millions of rows). An
+ * earlier version did that plus `rank() over (...)`, forcing a multi-hundred-MB
+ * disk sort that took ~22s to read a single player's ranks. Instead we keep the
+ * population at ~one row per (player, scope) and count betters per scope with a
+ * hash aggregate (playerRanksAggSql) — sub-second.
  */
 export function playerRanksSql(): string {
   const aggs = METRICS.map((m) => `sum(${METRIC_COLUMNS[m]}) as ${m}`).join(", ");
   const cols = METRICS.map((m) => `${METRIC_COLUMNS[m]} as ${m}`).join(", ");
-  const entries: string[] = [];
-  for (const m of METRICS) {
-    const total = m === "playtime" ? "s.playtime / 3600.0" : `s.${m}::real`;
-    entries.push(`('${m}', 'total', ${total})`);
-    if (m === "playtime") continue;
-    for (const hours of RATE_THRESHOLD_HOURS) {
-      entries.push(
-        `('${m}', 'per_hour:${hours}h', case when s.playtime >= ${hours * 3600} then s.${m} * 3600.0 / s.playtime end)`,
-      );
-    }
-  }
   return `
     with pop as (
       select c.* from player_class_stats c join players p using (steamid)
@@ -258,15 +257,47 @@ export function playerRanksSql(): string {
       select steamid, 0 as scope, ${aggs} from pop group by steamid
       union all
       select steamid, class_num as scope, ${cols} from pop
-    ),
-    ranked as (
-      select s.scope, s.steamid, m.metric, m.kind, m.value::real as value,
-        rank() over (partition by s.scope, m.metric, m.kind order by m.value desc)::int as rnk,
-        count(*) over (partition by s.scope, m.metric, m.kind)::int as participants
-      from scoped s
-      cross join lateral (values ${entries.join(",\n        ")}) as m(metric, kind, value)
-      where m.value is not null
     )`;
+}
+
+/**
+ * Aggregate over `scoped` (see playerRanksSql) joined to the caller's `me` CTE,
+ * producing one row per scope the player appears in. Per board cell it emits:
+ *   - `me_<metric>`  the player's own value for the scope (raw metric units)
+ *   - `p_total`      total-board participant count for the scope
+ *   - `rt_<metric>`  the player's rank on that scope's total board
+ *   - `ph_<Nh>`      per-hour participant count for playtime threshold N
+ *   - `rh_<metric>_<Nh>` the player's rank on that scope's per-hour board
+ * rank = 1 + (players strictly ahead), matching SQL rank() tie semantics.
+ * fetchPlayerRanks un-pivots these into one PlayerRankRow per board.
+ */
+export function playerRanksAggSql(): string {
+  const cols: string[] = ["s.scope"];
+  cols.push("count(*)::int as p_total");
+  for (const m of METRICS) cols.push(`max(me.${m}) as me_${m}`);
+  for (const m of METRICS) {
+    cols.push(`(1 + count(*) filter (where s.${m} > me.${m}))::int as rt_${m}`);
+  }
+  for (const hours of RATE_THRESHOLD_HOURS) {
+    const t = hours * 3600;
+    cols.push(`count(*) filter (where s.playtime >= ${t})::int as ph_${hours}h`);
+  }
+  for (const m of METRICS) {
+    if (m === "playtime") continue;
+    for (const hours of RATE_THRESHOLD_HOURS) {
+      const t = hours * 3600;
+      cols.push(
+        `(1 + count(*) filter (where s.playtime >= ${t} and ` +
+          `s.${m} * 3600.0 / nullif(s.playtime, 0) > me.${m} * 3600.0 / nullif(me.playtime, 0)))::int ` +
+          `as rh_${m}_${hours}h`,
+      );
+    }
+  }
+  return `
+    select ${cols.join(",\n      ")}
+    from scoped s
+    join me on me.scope = s.scope
+    group by s.scope`;
 }
 
 /**

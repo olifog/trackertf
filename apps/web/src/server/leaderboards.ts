@@ -6,7 +6,10 @@ import {
   boardCountSql,
   boardSelectSql,
   hoursRankSql,
+  METRICS,
+  playerRanksAggSql,
   playerRanksSql,
+  RATE_THRESHOLD_HOURS,
 } from "@trackertf/db/boards";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -89,19 +92,24 @@ export interface PlayerRankRow {
 }
 
 /**
- * The player's live rank on every board, computed with window functions:
- * one pass over player_class_stats (all metric/scope/kind cells) plus one
- * over players (hours board). Sorted by rank percentile, best first.
+ * The player's live rank on every board. One pass over player_class_stats that
+ * counts, per scope, how many players are ahead of this player on each board
+ * (playerRanksSql + playerRanksAggSql), plus one pass over players for the hours
+ * board. Sorted by rank percentile, best first.
+ *
+ * The rank pass deliberately avoids ranking the whole population: an earlier
+ * window-function version sorted millions of population×board rows on disk and
+ * took ~22s. See playerRanksSql/playerRanksAggSql in boards.ts.
  */
 export const fetchPlayerRanks = createServerFn({ method: "GET" })
   .validator(z.object({ steamid: z.string().regex(/^\d{17}$/) }))
   .handler(async ({ data }): Promise<PlayerRankRow[]> => {
     const db = getDb();
-    const [classRows, hoursRows] = await Promise.all([
+    const [scopeRows, hoursRows] = await Promise.all([
       db.execute(sql`
         ${sql.raw(playerRanksSql())}
-        select scope, metric, kind, value, rnk, participants
-        from ranked where steamid = ${data.steamid}
+        , me as (select * from scoped where steamid = ${data.steamid})
+        ${sql.raw(playerRanksAggSql())}
       `) as unknown as Promise<Record<string, unknown>[]>,
       db.execute(sql`
         select rnk, participants, value
@@ -111,18 +119,43 @@ export const fetchPlayerRanks = createServerFn({ method: "GET" })
     ]);
 
     const ranks: PlayerRankRow[] = [];
-    for (const r of classRows) {
-      const scope = (r["scope"] as number) === 0 ? "overall" : (r["scope"] as number);
-      const key = `${r["metric"] as string}:${scope}:${r["kind"] as string}`;
-      const def = BOARD_MAP.get(key);
-      if (!def) continue;
-      ranks.push({
-        boardKey: key,
-        label: def.label,
-        rank: r["rnk"] as number,
-        of: r["participants"] as number,
-        value: r["value"] as number,
-      });
+    // Each row is one scope (0 = overall, N = class N); un-pivot into per-board
+    // rank rows to mirror the board key grid in boards.ts.
+    for (const r of scopeRows) {
+      const scopeNum = r["scope"] as number;
+      const scope = scopeNum === 0 ? "overall" : scopeNum;
+      const pTotal = r["p_total"] as number;
+      const mePlaytime = Number(r["me_playtime"]);
+      for (const m of METRICS) {
+        const totalKey = `${m}:${scope}:total`;
+        const totalDef = BOARD_MAP.get(totalKey);
+        if (totalDef) {
+          const raw = Number(r[`me_${m}`]);
+          ranks.push({
+            boardKey: totalKey,
+            label: totalDef.label,
+            rank: r[`rt_${m}`] as number,
+            of: pTotal,
+            value: m === "playtime" ? raw / 3600 : raw,
+          });
+        }
+        if (m === "playtime") continue;
+        for (const hours of RATE_THRESHOLD_HOURS) {
+          // player only appears on a per-hour board once past its threshold
+          if (mePlaytime < hours * 3600) continue;
+          const key = `${m}:${scope}:per_hour:${hours}h`;
+          const def = BOARD_MAP.get(key);
+          if (!def) continue;
+          const meMetric = Number(r[`me_${m}`]);
+          ranks.push({
+            boardKey: key,
+            label: def.label,
+            rank: r[`rh_${m}_${hours}h`] as number,
+            of: r[`ph_${hours}h`] as number,
+            value: mePlaytime > 0 ? (meMetric * 3600) / mePlaytime : 0,
+          });
+        }
+      }
     }
     const hours = hoursRows[0];
     if (hours) {
