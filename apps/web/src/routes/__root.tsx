@@ -87,7 +87,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body className="min-h-screen">
         <header className="border-b px-6 py-3">
-          <nav className="mx-auto flex max-w-4xl items-center gap-5">
+          <nav className="mx-auto flex max-w-7xl items-center gap-5">
             <Link to="/" className="flex items-center gap-2">
               <img src="/logo.png" alt="" className="h-8 w-8" />
               <span className="font-heading text-lg font-bold text-primary">tracker.tf</span>
@@ -113,7 +113,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
             <AuthNav user={user} />
           </nav>
         </header>
-        <main className="mx-auto max-w-4xl px-6 py-8">{children}</main>
+        <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
         <Analytics />
         <Scripts />
       </body>
