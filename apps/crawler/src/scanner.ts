@@ -4,10 +4,14 @@
  * servers are detected via the "valve" gametype tag (SDR-hidden, hence region
  * from the master list rather than IP).
  *
- * GetServerList truncates at exactly 10,000 results and TF2 has more servers
- * than that, so each scan runs two disjoint queries (valve / non-valve
- * gametype) and merges them. If either half ever hits the 10k cap it must be
- * re-split further — the loud warning below is the tripwire.
+ * GetServerList truncates at exactly 10,000 results. Post-SDR, TF2 reports
+ * 10,000+ valve servers but almost all are phantom empty matchmaking
+ * reservations (only ~400 valve servers actually hold players at any time), so
+ * an unfiltered valve query truncates and the count is meaningless. We only
+ * care about servers where players actually are, so both queries add `\empty\1`
+ * ("not empty") — that captures every occupied server (valve + community) in a
+ * few hundred rows each, well under the cap. If either half ever hits 10k it
+ * must be re-split further — the loud warning below is the tripwire.
  */
 import { createDbFromEnv, schema } from "@trackertf/db";
 import { SteamClient } from "@trackertf/steam";
@@ -20,16 +24,23 @@ const db = createDbFromEnv();
 const steam = new SteamClient({ apiKey, ratePerSecond: 1, onResult: record });
 const INTERVAL_MS = 5 * 60_000;
 
-const SCAN_FILTERS = ["\\appid\\440\\gametype\\valve", "\\appid\\440\\nor\\1\\gametype\\valve"];
+const SCAN_FILTERS = [
+  "\\appid\\440\\gametype\\valve\\empty\\1",
+  "\\appid\\440\\nor\\1\\gametype\\valve\\empty\\1",
+];
 
 async function scan(): Promise<void> {
   const servers = [];
+  let ok = 0;
   for (const filter of SCAN_FILTERS) {
     const res = await steam.getServerList(filter, 50000);
     if (res.kind !== "ok") {
+      // Don't abort the whole scan on one filter's failure — write what the
+      // other filters returned rather than leaving a hole in the timeline.
       console.warn("GetServerList failed:", res.kind, filter);
-      return;
+      continue;
     }
+    ok += 1;
     if (res.data.length === 10000) {
       console.error(
         `!!! GetServerList TRUNCATED at 10000 for filter ${filter} — ` +
@@ -37,6 +48,10 @@ async function scan(): Promise<void> {
       );
     }
     servers.push(...res.data);
+  }
+  if (ok === 0) {
+    console.warn("scan skipped: every GetServerList filter failed");
+    return;
   }
   const scannedAt = new Date();
   scannedAt.setSeconds(0, 0);
