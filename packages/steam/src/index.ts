@@ -43,6 +43,16 @@ export interface SteamClientOptions {
   fetchImpl?: typeof fetch;
   /** observability hook, called after every API round-trip */
   onResult?: (endpoint: string, outcome: string) => void;
+  /**
+   * Cross-process admission gate, awaited before every API round-trip (and
+   * before the in-process TokenBucket). This is where the Postgres-backed
+   * budget broker (see @trackertf/db `takeSteamBudget`) enforces the GLOBAL
+   * rate ceiling and per-class fairness across the crawler/scanner/sampler/web
+   * processes that share the single API key. The local TokenBucket stays as a
+   * per-process safety cap for when the broker/DB is unreachable. Left unset,
+   * the client behaves exactly as before (local bucket only).
+   */
+  beforeCall?: (endpoint: string) => Promise<void>;
 }
 
 export class SteamClient {
@@ -50,12 +60,14 @@ export class SteamClient {
   readonly #bucket: TokenBucket;
   readonly #fetch: typeof fetch;
   readonly #onResult: ((endpoint: string, outcome: string) => void) | undefined;
+  readonly #beforeCall: ((endpoint: string) => Promise<void>) | undefined;
 
   constructor(opts: SteamClientOptions) {
     this.#key = opts.apiKey;
     this.#bucket = new TokenBucket({ ratePerSecond: opts.ratePerSecond ?? 1 });
     this.#fetch = opts.fetchImpl ?? fetch;
     this.#onResult = opts.onResult;
+    this.#beforeCall = opts.beforeCall;
   }
 
   async #get<S extends z.ZodType>(
@@ -77,6 +89,11 @@ export class SteamClient {
     params: Record<string, string>,
     schema: S,
   ): Promise<SteamResult<z.infer<S>>> {
+    // Global cross-process budget gate first, then the local per-process cap.
+    if (this.#beforeCall) {
+      const endpoint = path.split("/").filter(Boolean).slice(0, 2).join("/");
+      await this.#beforeCall(endpoint);
+    }
     await this.#bucket.take();
     const search = new URLSearchParams({ key: this.#key, ...params });
     let res: Response;

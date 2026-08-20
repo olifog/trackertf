@@ -14,14 +14,11 @@
  * must be re-split further — the loud warning below is the tripwire.
  */
 import { createDbFromEnv, schema } from "@trackertf/db";
-import { SteamClient } from "@trackertf/steam";
-import { flushMetrics, record } from "./metrics.ts";
-
-const apiKey = process.env["STEAM_API_KEY"];
-if (!apiKey) throw new Error("STEAM_API_KEY is not set");
+import { flushMetrics } from "./metrics.ts";
+import { createBudgetedSteamClient } from "./steamBudget.ts";
 
 const db = createDbFromEnv();
-const steam = new SteamClient({ apiKey, ratePerSecond: 1, onResult: record });
+const steam = createBudgetedSteamClient(db, "scanner");
 const INTERVAL_MS = 5 * 60_000;
 
 // Populated Valve, populated community, and EMPTY community. We never query

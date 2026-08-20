@@ -36,15 +36,13 @@
  * are sampled, community point-farming servers cannot pollute these rates.
  */
 import { createDbFromEnv, schema } from "@trackertf/db";
-import { type FakeIpPlayer, type GameServer, SteamClient } from "@trackertf/steam";
+import { type FakeIpPlayer, type GameServer } from "@trackertf/steam";
 import { eq, sql } from "drizzle-orm";
-import { flushMetrics, record } from "./metrics.ts";
-
-const apiKey = process.env["STEAM_API_KEY"];
-if (!apiKey) throw new Error("STEAM_API_KEY is not set");
+import { flushMetrics } from "./metrics.ts";
+import { createBudgetedSteamClient } from "./steamBudget.ts";
 
 const db = createDbFromEnv();
-const steam = new SteamClient({ apiKey, ratePerSecond: 1, onResult: record });
+const steam = createBudgetedSteamClient(db, "sampler");
 
 // \empty\1 (has players) keeps the list under GetServerList's hard 10k
 // truncation — the bare valve filter returns >10k thanks to idle SDR standby
@@ -63,6 +61,18 @@ const RESET_MIN_OVERLAP = 4;
 const RESET_DROP_FRACTION = 0.6;
 /** never sample a single server faster than this, whatever the budget allows */
 const MIN_ROUND_MS = 60_000;
+/**
+ * CCU-adaptive pacing: TF2's live concurrent-player count (the scanner writes
+ * it to population_snapshots) tells us how much play there is to witness. When
+ * the game is busy we tighten the round interval to capture more matches; when
+ * it's quiet we relax it, handing the freed API surplus back to the shared
+ * budget pool for the crawler. REF_CCU is the "normal" population the base
+ * interval is tuned for; the scale is clamped so a bad/missing reading can't
+ * make the sampler run away or stall.
+ */
+const REF_CCU = 90_000;
+const CCU_SCALE_MIN = 0.6;
+const CCU_SCALE_MAX = 2.0;
 
 const CALLS_PER_DAY = Number(process.env["SAMPLER_CALLS_PER_DAY"] ?? 15000);
 if (!Number.isFinite(CALLS_PER_DAY) || CALLS_PER_DAY <= 0) {
@@ -330,10 +340,32 @@ async function round(): Promise<void> {
   );
 }
 
+/**
+ * The base round interval scaled by live TF2 population: busy → shorter (down
+ * to MIN_ROUND_MS), quiet → longer. Falls back to the base interval if no CCU
+ * reading is available. The shared budget broker still enforces the hard rate
+ * ceiling, so this only shifts WHEN the sampler spends its allowance.
+ */
+async function adaptiveIntervalMs(): Promise<number> {
+  let ccu = REF_CCU;
+  try {
+    const [row] = (await db
+      .select({ n: schema.populationSnapshots.currentPlayers })
+      .from(schema.populationSnapshots)
+      .orderBy(sql`scanned_at desc`)
+      .limit(1)) as unknown as [{ n: number } | undefined];
+    if (row?.n && row.n > 0) ccu = row.n;
+  } catch (err) {
+    console.warn("adaptiveIntervalMs: CCU read failed, using base interval:", err);
+  }
+  const scale = Math.min(CCU_SCALE_MAX, Math.max(CCU_SCALE_MIN, REF_CCU / ccu));
+  return Math.max(MIN_ROUND_MS, Math.round(ROUND_INTERVAL_MS * scale));
+}
+
 console.log(
   `sampler started: continuous tracking of ${TARGET_SERVERS} servers, ` +
-    `round every ${(ROUND_INTERVAL_MS / 60_000).toFixed(1)} min ` +
-    `(${CALLS_PER_ROUND} calls/round, budget ${CALLS_PER_DAY}/day)`,
+    `base round every ${(ROUND_INTERVAL_MS / 60_000).toFixed(1)} min ` +
+    `(${CALLS_PER_ROUND} calls/round, budget ${CALLS_PER_DAY}/day), CCU-adaptive`,
 );
 for (;;) {
   const start = Date.now();
@@ -347,5 +379,6 @@ for (;;) {
   } catch (err) {
     console.error("flushMetrics failed:", err);
   }
-  await Bun.sleep(Math.max(0, ROUND_INTERVAL_MS - (Date.now() - start)));
+  const interval = await adaptiveIntervalMs();
+  await Bun.sleep(Math.max(0, interval - (Date.now() - start)));
 }

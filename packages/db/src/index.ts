@@ -5,6 +5,8 @@ import * as schema from "./schema.ts";
 export * as schema from "./schema.ts";
 export type Db = ReturnType<typeof createDb>;
 
+export { takeSteamBudget, type SteamBudgetClass, type TakeOptions } from "./steamBudget.ts";
+
 export function createDb(url: string) {
   const client = postgres(url, { prepare: false });
   return drizzle(client, { schema, casing: "snake_case" });

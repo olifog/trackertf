@@ -1,14 +1,12 @@
 import { createDbFromEnv, schema } from "@trackertf/db";
-import { SteamClient, type SteamResult } from "@trackertf/steam";
+import { type SteamResult } from "@trackertf/steam";
 import { eq, sql } from "drizzle-orm";
-import { flushMetrics, record } from "./metrics.ts";
+import { flushMetrics } from "./metrics.ts";
 import { parseClassStats, parseEquipped } from "./parse.ts";
-
-const apiKey = process.env["STEAM_API_KEY"];
-if (!apiKey) throw new Error("STEAM_API_KEY is not set");
+import { createBudgetedSteamClient } from "./steamBudget.ts";
 
 const db = createDbFromEnv();
-const steam = new SteamClient({ apiKey, ratePerSecond: 1, onResult: record });
+const steam = createBudgetedSteamClient(db, "crawler");
 
 /** Queue expansion mirrors styletf: active, high-hours players spread the BFS. */
 const EXPAND_MIN_MINUTES = 100_000;
@@ -34,7 +32,32 @@ let pausedUntil = 0;
 
 type FrontierItem = { steamid: string; source: (typeof schema.frontierSource.enumValues)[number] };
 
-async function dequeue(): Promise<FrontierItem | undefined> {
+/**
+ * Weighted round-robin service weights per frontier source. Strict priority
+ * (the old `order by priority desc`) starved low-priority classes: a flood of
+ * recrawls (priority 1) could indefinitely block the friend-BFS backlog
+ * (priority 0), freezing discovery. Instead each dequeue runs a weighted
+ * lottery over the sources that currently have work, so long-run service share
+ * is proportional to weight and EVERY source with a weight > 0 keeps flowing.
+ * `priority`/`enqueued_at` still order rows WITHIN a chosen source.
+ */
+const SOURCE_WEIGHT = sql`case source
+  when 'seed' then 8
+  when 'recrawl' then 5
+  when 'review_sample' then 3
+  when 'random_sample' then 3
+  when 'friend_bfs' then 4
+  else 1
+end`;
+
+/**
+ * One weighted-fair draw: pick a source by lottery (Efraimidis–Spirakis key
+ * random()^(1/weight), so P(pick) ∝ weight among sources with eligible rows),
+ * then lock that source's best unlocked row. `for update skip locked` means
+ * concurrent workers landing on the same source grab DIFFERENT rows rather than
+ * colliding. Returns undefined if the drawn source's rows were all locked.
+ */
+async function drawOne(): Promise<FrontierItem | undefined> {
   const now = new Date();
   const [row] = await db
     .update(schema.crawlFrontier)
@@ -47,7 +70,17 @@ async function dequeue(): Promise<FrontierItem | undefined> {
         schema.crawlFrontier.steamid,
         sql`(
           select steamid from crawl_frontier
-          where (locked_until is null or locked_until < now()) and attempts < ${MAX_ATTEMPTS}
+          where (locked_until is null or locked_until < now())
+            and attempts < ${MAX_ATTEMPTS}
+            and source = (
+              select source from (
+                select distinct source from crawl_frontier
+                where (locked_until is null or locked_until < now())
+                  and attempts < ${MAX_ATTEMPTS}
+              ) avail
+              order by power(random(), 1.0 / (${SOURCE_WEIGHT})) desc
+              limit 1
+            )
           order by priority desc, enqueued_at asc
           limit 1
           for update skip locked
@@ -59,6 +92,17 @@ async function dequeue(): Promise<FrontierItem | undefined> {
       source: schema.crawlFrontier.source,
     });
   return row;
+}
+
+async function dequeue(): Promise<FrontierItem | undefined> {
+  // A draw can come back empty if the lottery lands on a source whose eligible
+  // rows are all locked by peers; redraw a few times before declaring the
+  // frontier empty so contention doesn't masquerade as "no work".
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const row = await drawOne();
+    if (row) return row;
+  }
+  return undefined;
 }
 
 /** Friends enter the frontier only if never crawled — recrawls are deliberate. */

@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
-import { schema } from "@trackertf/db";
+import { schema, takeSteamBudget } from "@trackertf/db";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { qualityRank } from "#/lib/quality";
@@ -363,6 +363,12 @@ export const lookupPlayer = createServerFn({ method: "GET" })
     if (!vanity) return { steamid: null };
     const key = process.env["STEAM_API_KEY"];
     if (!key) return { steamid: null };
+    // On-demand FAST LANE: pass through the shared budget broker on the 'web'
+    // class so interactive lookups count against the global Steam ceiling, but
+    // with a short maxWait — a rare budget overshoot beats hanging the request.
+    // The 'web' class has its own guaranteed floor, so it never queues behind
+    // the crawler's background frontier.
+    await takeSteamBudget(getDb(), "web", { maxWaitMs: 3000 });
     const res = await fetch(
       `https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?key=${key}&vanityurl=${encodeURIComponent(vanity)}`,
     );

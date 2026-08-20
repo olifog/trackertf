@@ -3,6 +3,7 @@ import {
   bigserial,
   boolean,
   date,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -180,6 +181,34 @@ export const itemClassSlots = pgTable(
   },
   (t) => [primaryKey({ columns: [t.defindex, t.classNum, t.slot] })],
 );
+
+/**
+ * Cross-process Steam API budget broker (see steamBudget.ts + the
+ * steam_budget_take() SQL function). One row per rate CLASS plus a special
+ * '_shared' surplus row, modelling a hierarchical token bucket: the sum of all
+ * class floors + the shared refill is the GLOBAL rate ceiling for the single
+ * API key. A call from a class is admitted if that class's own bucket has a
+ * token (its guaranteed floor / starvation protection) OR the shared bucket
+ * does (borrowed surplus / fairness). Every crawler/scanner/sampler/web call
+ * passes through this, so the combined rate can never exceed Steam's ~100k/day.
+ * Tunable at runtime by UPDATEing refill_per_sec / capacity — no redeploy.
+ * NOTE: web_ro needs EXECUTE on steam_budget_take(text) (deployer handles it);
+ * the function is SECURITY DEFINER so web_ro stays read-only on the table.
+ */
+export const steamBudget = pgTable("steam_budget", {
+  /** rate class: 'crawler' | 'scanner' | 'sampler' | 'web' | '_shared' */
+  class: text().primaryKey(),
+  /** current tokens (fractional); a token = one permitted API call */
+  tokens: doublePrecision().notNull(),
+  /** burst ceiling — max tokens this bucket can bank */
+  capacity: doublePrecision().notNull(),
+  /** steady refill rate in tokens/second (a class's guaranteed floor) */
+  refillPerSec: doublePrecision("refill_per_sec").notNull(),
+  /** last refill wall-clock, advanced atomically inside steam_budget_take() */
+  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  /** lifetime admitted-call counter, for observability */
+  consumedTotal: bigint("consumed_total", { mode: "number" }).notNull().default(0),
+});
 
 /** hourly Steam API call outcome counters, for the /health page */
 export const apiMetrics = pgTable(
