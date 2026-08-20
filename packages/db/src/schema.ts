@@ -2,6 +2,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -40,6 +41,10 @@ export const players = pgTable(
     lastCrawled: timestamp({ withTimezone: true }),
     personaname: text(),
     avatarHash: text(),
+    /** ISO 3166-1 alpha-2 country from the Steam profile (loccountrycode);
+     * nullable — only set for public profiles that expose a country, backfills
+     * as the crawler recrawls. Coarse region hint for name→profile matching. */
+    loccountrycode: text(),
     /** communityvisibilitystate: 3 = public */
     visibility: smallint(),
     tf2Minutes: integer(),
@@ -47,6 +52,11 @@ export const players = pgTable(
     tf2Minutes2wk: integer("tf2_minutes_2wk"),
     vacBanned: boolean(),
     gameBans: smallint(),
+    /** [0,1] likelihood this account is a bot / stat-outlier (idle, impossible
+     * rates, hack markers, absurd playtime). Computed by the analyser every pass.
+     * NULL = not yet scored (treated as 0 / included) — see docs/botness-signals.md.
+     * >= 0.5 is excluded from usage aggregates and leaderboards. */
+    botness: real(),
     itemsStatus: fetchStatus(),
     statsStatus: fetchStatus(),
     friendsStatus: fetchStatus(),
@@ -377,4 +387,28 @@ export const usageStats = pgTable(
       t.mergeReskins,
     ),
   ],
+);
+
+/**
+ * Daily headline-usage history for the /usage delta-compare feature. Only the
+ * default view is retained (classNum/slot = -1 "any", default population,
+ * merged reskins) so this stays bounded to ~one row per item per day rather
+ * than mirroring the full usage_stats cube. The analyser upserts today's row
+ * every run, so `day` holds that day's latest headline value. No backfill —
+ * history accrues from first deploy forward.
+ */
+export const usageStatsHistory = pgTable(
+  "usage_stats_history",
+  {
+    defindex: integer().notNull(),
+    /** UTC calendar day of the snapshot */
+    day: date().notNull(),
+    /** normalized usage share for the default headline view */
+    usage: real().notNull(),
+    /** raw equip count for the default headline view */
+    count: integer().notNull().default(0),
+    /** population size the headline view was computed over */
+    sampleSize: integer().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.defindex, t.day] })],
 );

@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
+import { chQuery } from "@trackertf/clickhouse";
 import {
   BOARD_MAP,
   type BoardDef,
@@ -13,6 +14,7 @@ import {
 } from "@trackertf/db/boards";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
+import { getCh } from "./ch.ts";
 import { getDb } from "./db.ts";
 
 export interface LeaderRow {
@@ -29,13 +31,76 @@ export interface LeaderboardResponse {
   participants: number | null;
 }
 
+/**
+ * Strange-kill boards live outside the (metric, scope, kind) grid in boards.ts:
+ * strange_kills + quality exist only in ClickHouse `equipped`, never in the
+ * Postgres precompute the other boards read. So these keys are handled by a
+ * dedicated CH→PG path here and are deliberately absent from BOARD_MAP.
+ */
+export const STRANGE_BOARD_KEYS = ["strange:total", "strange:max"] as const;
+export type StrangeBoardKey = (typeof STRANGE_BOARD_KEYS)[number];
+const STRANGE_KEY_SET: ReadonlySet<string> = new Set(STRANGE_BOARD_KEYS);
+export const isStrangeBoard = (key: string): key is StrangeBoardKey =>
+  STRANGE_KEY_SET.has(key);
+
 const boardKeySchema = z
   .string()
-  .refine((key): key is string => BOARD_MAP.has(key), "unknown board");
+  .refine((key): key is string => BOARD_MAP.has(key) || isStrangeBoard(key), "unknown board");
+
+/**
+ * Strange-kill leaderboard: rank crawled players by kills on their Strange
+ * (quality 11) equipped items. `strange:total` sums every equipped Strange
+ * counter a player is displaying; `strange:max` takes their single highest
+ * counter. Sourced from ClickHouse `equipped` (the only place quality /
+ * strange_kills live), then joined back to Postgres `players` for persona /
+ * avatar and the POP filter (public persona, no VAC ban, botness < 0.5 — the
+ * same bot/outlier exclusion boards.ts applies to the grid boards).
+ */
+async function fetchStrangeBoard(board: StrangeBoardKey): Promise<LeaderboardResponse> {
+  const agg = board === "strange:max" ? "max(strange_kills)" : "sum(strange_kills)";
+  // over-fetch from CH so POP-filtered dropouts in PG still leave a full top-100
+  const chRows = await chQuery<{ steamid: string; value: string | number }>(
+    getCh(),
+    `select toString(steamid) as steamid, toUInt64(${agg}) as value
+     from equipped
+     where quality = 11 and strange_kills > 0
+     group by steamid
+     order by value desc
+     limit 300`,
+  );
+  if (chRows.length === 0) return { rows: [], participants: null };
+
+  const valueBySteamid = new Map(chRows.map((r) => [String(r.steamid), Number(r.value)]));
+  const ids = [...valueBySteamid.keys()];
+  const db = getDb();
+  const pgRows = (await db.execute(sql`
+    select steamid, personaname, avatar_hash
+    from players
+    where steamid = any(${ids})
+      and personaname is not null and vac_banned = false
+      and coalesce(botness, 0) < 0.5
+  `)) as unknown as Record<string, unknown>[];
+
+  const rows: LeaderRow[] = pgRows
+    .map((r) => ({
+      steamid: r["steamid"] as string,
+      personaname: r["personaname"] as string | null,
+      avatarHash: r["avatar_hash"] as string | null,
+      value: valueBySteamid.get(r["steamid"] as string) ?? 0,
+    }))
+    .sort((a, b) => b.value - a.value || a.steamid.localeCompare(b.steamid))
+    .slice(0, 100)
+    .map((r, i) => ({ ...r, rank: i + 1 }));
+
+  // no cheap exact population count (would need the full CH×PG join), so leave
+  // the percentile denominator null rather than report a misleading number
+  return { rows, participants: null };
+}
 
 export const fetchLeaderboard = createServerFn({ method: "GET" })
   .validator(z.object({ board: boardKeySchema }))
   .handler(async ({ data }): Promise<LeaderboardResponse> => {
+    if (isStrangeBoard(data.board)) return fetchStrangeBoard(data.board);
     const def = BOARD_MAP.get(data.board) as BoardDef;
     const db = getDb();
     let rows = (await db.execute(sql`

@@ -12,6 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "#/components/ui/card";
+import { FilterRow, Segmented } from "#/components/ui/filter-bar";
 import {
   ChartContainer,
   type ChartConfig,
@@ -28,12 +29,15 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { avatarUrl } from "#/lib/tf2";
 import {
   matchLeaderboardQueryOptions,
   type LeaderRow,
   matchLeaderFiltersSchema,
   type Participant,
+  type ProfileCandidate,
   recentSegmentsQueryOptions,
+  resolveParticipantQueryOptions,
   type SegmentRow,
   segmentQueryOptions,
 } from "#/server/matches";
@@ -72,14 +76,6 @@ function regionLabel(code: number): string {
 
 type SearchPatch = Partial<ReturnType<typeof Route.useSearch>>;
 
-function Segmented({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="inline-flex overflow-hidden rounded-md border divide-x divide-border">
-      {children}
-    </div>
-  );
-}
-
 function Segment({
   children,
   active,
@@ -93,7 +89,7 @@ function Segment({
     <Link
       from={Route.fullPath}
       search={(prev) => ({ ...prev, ...patch })}
-      className={`flex h-8 items-center px-2.5 text-[13px] leading-none transition-colors ${
+      className={`flex h-9 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
         active
           ? "bg-primary font-medium text-primary-foreground"
           : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
@@ -101,17 +97,6 @@ function Segment({
     >
       {children}
     </Link>
-  );
-}
-
-function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="w-20 shrink-0 text-right font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
-        {label}
-      </span>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">{children}</div>
-    </div>
   );
 }
 
@@ -156,6 +141,136 @@ const histConfig = {
 } satisfies ChartConfig;
 
 const regionConfig = { players: { label: "Players" } } satisfies ChartConfig;
+
+/** 2-letter ISO country code → regional-indicator flag emoji ("" if invalid). */
+function countryFlag(code: string | null): string {
+  if (!code || !/^[a-zA-Z]{2}$/.test(code)) return "";
+  const base = 0x1f1e6;
+  return String.fromCodePoint(
+    ...[...code.toUpperCase()].map((c) => base + c.charCodeAt(0) - 65),
+  );
+}
+
+function fmtHours2wk(min: number | null): string {
+  if (!min || min <= 0) return "dormant";
+  const h = min / 60;
+  return h < 10 ? `${h.toFixed(1)}h/2wk` : `${Math.round(h)}h/2wk`;
+}
+
+const TIER_STYLE: Record<ProfileCandidate["tier"], string> = {
+  strong: "bg-primary/20 text-primary border-primary/40",
+  possible: "bg-secondary/60 text-secondary-foreground border-border",
+  weak: "bg-transparent text-muted-foreground border-border",
+};
+
+function TierBadge({ tier, confidence }: { tier: ProfileCandidate["tier"]; confidence: number }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] tracking-wider uppercase ${TIER_STYLE[tier]}`}
+      title={`confidence ${(confidence * 100).toFixed(0)}%`}
+    >
+      {tier} · {(confidence * 100).toFixed(0)}%
+    </span>
+  );
+}
+
+function SignalChip({ on, children }: { on: boolean; children: React.ReactNode }) {
+  return (
+    <span
+      className={`rounded px-1 py-0.5 font-mono text-[10px] ${
+        on ? "bg-primary/15 text-primary" : "text-muted-foreground/50 line-through"
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function CandidateCard({ c }: { c: ProfileCandidate }) {
+  const avatar = avatarUrl(c.avatarHash);
+  const flag = countryFlag(c.loccountrycode);
+  return (
+    <div className="flex items-center gap-3 rounded-md border bg-card/40 px-3 py-2">
+      {avatar ? (
+        <img src={avatar} alt="" className="h-8 w-8 shrink-0 rounded" />
+      ) : (
+        <div className="h-8 w-8 shrink-0 rounded bg-secondary/60" />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <Link
+            to="/player/$steamid"
+            params={{ steamid: c.steamid }}
+            className="truncate font-medium text-primary hover:underline"
+          >
+            {c.personaname ?? c.steamid}
+          </Link>
+          {flag && <span title={c.loccountrycode ?? undefined}>{flag}</span>}
+          <TierBadge tier={c.tier} confidence={c.confidence} />
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <span className="font-mono">{fmtHours2wk(c.tf2Minutes2wk)}</span>
+          <SignalChip on={c.signals.exactName}>exact name</SignalChip>
+          <SignalChip on={c.signals.recentlyActive}>active</SignalChip>
+          <SignalChip on={c.signals.deltaCorroborated}>Δ playtime verified</SignalChip>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Lazily-loaded probabilistic profile candidates for one observed name. */
+function CandidatePanel({ segmentId, name }: { segmentId: string; name: string }) {
+  const { data, isLoading } = useQuery(resolveParticipantQueryOptions(segmentId, name));
+  if (isLoading) {
+    return <div className="px-4 py-3 font-mono text-xs text-muted-foreground">matching…</div>;
+  }
+  if (!data || data.candidates.length === 0) {
+    return (
+      <div className="px-4 py-3 text-xs text-muted-foreground">
+        No profile candidates — this display name isn't in the crawled corpus (or is too generic
+        to match).
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2 px-4 py-3">
+      <p className="text-[11px] text-muted-foreground">
+        Probabilistic matches for <span className="font-mono">"{data.observedName}"</span> — ranked
+        by name, recent playtime and stat-snapshot deltas. Never a certain identity.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {data.candidates.slice(0, 8).map((c) => (
+          <CandidateCard key={c.steamid} c={c} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** A clickable observed name that toggles its candidate panel. */
+function MatchableName({
+  name,
+  open,
+  onToggle,
+}: {
+  name: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`max-w-full truncate text-left hover:text-primary hover:underline ${
+        open ? "text-primary" : ""
+      }`}
+      title="Show possible Steam profiles"
+    >
+      {name}
+    </button>
+  );
+}
 
 // pts/hr histogram edges; last bucket is open-ended.
 const PPH_EDGES = [0, 100, 200, 300, 400, 500];
@@ -215,8 +330,8 @@ function CasualSnapshot({ segments, leaders }: { segments: SegmentRow[]; leaders
                 dataKey="map"
                 tickLine={false}
                 axisLine={false}
-                width={120}
-                tick={{ fontSize: 11 }}
+                width={96}
+                tick={{ fontSize: 10 }}
               />
               <ChartTooltip content={<ChartTooltipContent />} />
               <Bar dataKey="players" fill="var(--color-players)" radius={4} />
@@ -279,7 +394,10 @@ function MatchesPage() {
           score over time. Observed points/hour is measured directly as{" "}
           <span className="font-mono text-xs">(last score - first score) / hours observed</span>:
           the real scoring pace on casual, not the farmable Valve lifetime stat. Names are in-game
-          display names, not linked Steam profiles.
+          display names — click one to see probabilistic Steam-profile candidates, ranked by name,
+          recent playtime and stat-snapshot deltas. These are never certain: map and region can't
+          disambiguate casual (SDR hides server location), so a shared name may match many
+          profiles.
         </p>
       </div>
 
@@ -335,27 +453,7 @@ function MatchesPage() {
           </TableHeader>
           <TableBody>
             {leaders.map((row, i) => (
-              <TableRow key={`${row.segmentId}:${row.name}`} className="h-9">
-                <TableCell className="py-1 text-right font-mono text-muted-foreground">
-                  {i + 1}
-                </TableCell>
-                <TableCell className="overflow-hidden py-1 text-ellipsis">{row.name}</TableCell>
-                <TableCell className="overflow-hidden py-1 font-mono text-xs text-ellipsis text-muted-foreground">
-                  {row.map}
-                </TableCell>
-                <TableCell className="py-1 text-xs text-muted-foreground">
-                  {regionLabel(row.region)}
-                </TableCell>
-                <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
-                  {fmtPph(row.pointsPerHour)}
-                </TableCell>
-                <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
-                  {fmtDuration(row.windowSec)}
-                </TableCell>
-                <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
-                  {row.observations}
-                </TableCell>
-              </TableRow>
+              <LeaderRows key={`${row.segmentId}:${row.name}`} row={row} rank={i + 1} />
             ))}
             {leaders.length === 0 && (
               <TableRow>
@@ -411,6 +509,43 @@ function MatchesPage() {
         </Table>
       </section>
     </div>
+  );
+}
+
+/** One leaderboard row; clicking the name expands its profile candidates. */
+function LeaderRows({ row, rank }: { row: LeaderRow; rank: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <TableRow className="h-9">
+        <TableCell className="py-1 text-right font-mono text-muted-foreground">{rank}</TableCell>
+        <TableCell className="overflow-hidden py-1 text-ellipsis">
+          <MatchableName name={row.name} open={open} onToggle={() => setOpen((o) => !o)} />
+        </TableCell>
+        <TableCell className="overflow-hidden py-1 font-mono text-xs text-ellipsis text-muted-foreground">
+          {row.map}
+        </TableCell>
+        <TableCell className="py-1 text-xs text-muted-foreground">
+          {regionLabel(row.region)}
+        </TableCell>
+        <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+          {fmtPph(row.pointsPerHour)}
+        </TableCell>
+        <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+          {fmtDuration(row.windowSec)}
+        </TableCell>
+        <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+          {row.observations}
+        </TableCell>
+      </TableRow>
+      {open && (
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={7} className="bg-secondary/20 p-0">
+            <CandidatePanel segmentId={row.segmentId} name={row.name} />
+          </TableCell>
+        </TableRow>
+      )}
+    </>
   );
 }
 
@@ -497,7 +632,7 @@ function SegmentDetail({ segmentId }: { segmentId: string }) {
         </TableHeader>
         <TableBody>
           {data.participants.map((p, i) => (
-            <ParticipantRow key={p.name} p={p} rank={i + 1} />
+            <ParticipantRow key={p.name} p={p} rank={i + 1} segmentId={segmentId} />
           ))}
         </TableBody>
       </Table>
@@ -505,26 +640,46 @@ function SegmentDetail({ segmentId }: { segmentId: string }) {
   );
 }
 
-function ParticipantRow({ p, rank }: { p: Participant; rank: number }) {
+function ParticipantRow({
+  p,
+  rank,
+  segmentId,
+}: {
+  p: Participant;
+  rank: number;
+  segmentId: string;
+}) {
+  const [open, setOpen] = useState(false);
   return (
-    <TableRow className="h-8">
-      <TableCell className="py-0.5 text-right font-mono text-muted-foreground">{rank}</TableCell>
-      <TableCell className="overflow-hidden py-0.5 text-ellipsis">{p.name}</TableCell>
-      <TableCell className="py-0.5 text-right font-mono text-sm tabular-nums">
-        {fmtPph(p.pointsPerHour)}
-      </TableCell>
-      <TableCell className="py-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
-        {p.firstScore} → {p.lastScore}
-      </TableCell>
-      <TableCell className="py-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
-        {p.maxScore}
-      </TableCell>
-      <TableCell className="py-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
-        {fmtDuration(p.windowSec)}
-      </TableCell>
-      <TableCell className="py-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
-        {p.observations}
-      </TableCell>
-    </TableRow>
+    <>
+      <TableRow className="h-8">
+        <TableCell className="py-0.5 text-right font-mono text-muted-foreground">{rank}</TableCell>
+        <TableCell className="overflow-hidden py-0.5 text-ellipsis">
+          <MatchableName name={p.name} open={open} onToggle={() => setOpen((o) => !o)} />
+        </TableCell>
+        <TableCell className="py-0.5 text-right font-mono text-sm tabular-nums">
+          {fmtPph(p.pointsPerHour)}
+        </TableCell>
+        <TableCell className="py-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
+          {p.firstScore} → {p.lastScore}
+        </TableCell>
+        <TableCell className="py-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
+          {p.maxScore}
+        </TableCell>
+        <TableCell className="py-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
+          {fmtDuration(p.windowSec)}
+        </TableCell>
+        <TableCell className="py-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
+          {p.observations}
+        </TableCell>
+      </TableRow>
+      {open && (
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={7} className="bg-background/60 p-0">
+            <CandidatePanel segmentId={segmentId} name={p.name} />
+          </TableCell>
+        </TableRow>
+      )}
+    </>
   );
 }

@@ -1,8 +1,10 @@
-import { infiniteQueryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
+import { chQuery } from "@trackertf/clickhouse";
 import { createDbFromEnv, type Db, schema } from "@trackertf/db";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
+import { getCh } from "./ch.ts";
 
 /** min lifetime minutes buckets the analyser precomputes (0 = everyone) */
 export const HOURS_BUCKETS = [0, 30_000, 60_000, 120_000, 240_000] as const;
@@ -135,3 +137,151 @@ export const usageInfiniteQueryOptions = (filters: UsageFilters) =>
     initialPageParam: 0,
     getNextPageParam: (last) => last.nextOffset,
   });
+
+/**
+ * Strange adoption per reskin group: what fraction of a weapon's equips are
+ * Strange quality (11). Keyed by `gid` (the ClickHouse reskin group id), which
+ * equals a usage row's `reskinGroup ?? defindex`, so it aligns with both merge
+ * modes. Computed over the whole equipped corpus — deliberately independent of
+ * the page's population sliders (it's an overall "how often is this run Strange"
+ * signal). Ultra-rare groups (<10 equips) are dropped so a lone Strange can't
+ * read as 100%.
+ */
+export interface StrangeShare {
+  gid: number;
+  /** 0..1 fraction of the group's equips that are Strange quality */
+  strangeShare: number;
+  /** total equips in the group (Strange share denominator) */
+  sampleSize: number;
+}
+
+export const fetchStrangeShares = createServerFn({ method: "GET" }).handler(
+  async (): Promise<StrangeShare[]> => {
+    const rows = await chQuery<Record<string, unknown>>(
+      getCh(),
+      `select gid,
+        countIf(quality = 11) as strange,
+        count() as total
+      from equipped
+      group by gid
+      having total >= 10`,
+    );
+    return rows.map((r) => {
+      const total = Number(r["total"]);
+      return {
+        gid: Number(r["gid"]),
+        strangeShare: total > 0 ? Number(r["strange"]) / total : 0,
+        sampleSize: total,
+      };
+    });
+  },
+);
+
+export const strangeSharesQueryOptions = () =>
+  queryOptions({ queryKey: ["strangeShares"], queryFn: () => fetchStrangeShares() });
+
+/** Per-item week-over-week change in headline usage share. The raw equip counts
+ * and population sizes are carried so the client can run a two-proportion z-test
+ * (shared helper) and flag noise-level shifts as non-significant. */
+export interface UsageDelta {
+  defindex: number;
+  usageNow: number;
+  usageThen: number;
+  /** usageNow - usageThen (signed usage-fraction change) */
+  delta: number;
+  /** equip count on the latest day (test x1) */
+  countNow: number;
+  /** population size on the latest day (test n1) */
+  sampleSizeNow: number;
+  /** equip count on the comparison day, 0 if the item had none (test x2) */
+  countThen: number;
+  /** population size on the comparison day (test n2) */
+  sampleSizeThen: number;
+}
+
+export interface UsageDeltaResponse {
+  /** false until there are two distinct snapshot days to compare */
+  enoughHistory: boolean;
+  /** most recent snapshot day (YYYY-MM-DD), or null before any snapshot */
+  latestDay: string | null;
+  /** the day `latest` is compared against (YYYY-MM-DD) */
+  comparisonDay: string | null;
+  /** whole days between comparisonDay and latestDay */
+  days: number;
+  deltas: UsageDelta[];
+}
+
+/**
+ * Week-over-week deltas for the default headline view only (Any class · Any
+ * slot · all players · merged). usage_stats_history stores just that slice, so
+ * defindex here is the reskin group id. Compares the newest snapshot against
+ * the newest snapshot at least 7 days older; if <7 days of history exist yet,
+ * falls back to the earliest snapshot and reports the real span in `days`.
+ */
+export const fetchUsageDeltas = createServerFn({ method: "GET" }).handler(
+  async (): Promise<UsageDeltaResponse> => {
+    const database = getDb();
+    const [bounds] = (await database.execute(sql`
+      select max(day)::text latest, min(day)::text earliest from usage_stats_history
+    `)) as unknown as [{ latest: string | null; earliest: string | null } | undefined];
+    const latest = bounds?.latest ?? null;
+    const earliest = bounds?.earliest ?? null;
+    if (!latest || !earliest) {
+      return { enoughHistory: false, latestDay: latest, comparisonDay: null, days: 0, deltas: [] };
+    }
+    const [cmp] = (await database.execute(sql`
+      select max(day)::text d from usage_stats_history where day <= ${latest}::date - 7
+    `)) as unknown as [{ d: string | null } | undefined];
+    const comparisonDay = cmp?.d ?? earliest;
+    const enoughHistory = comparisonDay !== latest;
+    const days = Math.round(
+      (new Date(latest).getTime() - new Date(comparisonDay).getTime()) / 86_400_000,
+    );
+    if (!enoughHistory) {
+      return { enoughHistory, latestDay: latest, comparisonDay, days, deltas: [] };
+    }
+    // sample_size is uniform across a day's rows (it's the population count), so
+    // when an item is absent on the comparison day we still use that day's
+    // population as n2 rather than 0 — a genuine "0 of N" observation.
+    const rows = (await database.execute(sql`
+      select n.defindex,
+        n.usage usage_now, n.count count_now, n.sample_size n_now,
+        coalesce(t.usage, 0) usage_then, coalesce(t.count, 0) count_then,
+        coalesce(
+          t.sample_size,
+          (select max(sample_size) from usage_stats_history where day = ${comparisonDay}::date)
+        ) n_then
+      from usage_stats_history n
+      left join usage_stats_history t
+        on t.defindex = n.defindex and t.day = ${comparisonDay}::date
+      where n.day = ${latest}::date
+    `)) as unknown as {
+      defindex: number;
+      usage_now: number;
+      count_now: number;
+      n_now: number;
+      usage_then: number;
+      count_then: number;
+      n_then: number;
+    }[];
+    return {
+      enoughHistory,
+      latestDay: latest,
+      comparisonDay,
+      days,
+      deltas: rows.map((r) => ({
+        defindex: Number(r.defindex),
+        usageNow: Number(r.usage_now),
+        usageThen: Number(r.usage_then),
+        delta: Number(r.usage_now) - Number(r.usage_then),
+        countNow: Number(r.count_now),
+        sampleSizeNow: Number(r.n_now),
+        countThen: Number(r.count_then),
+        sampleSizeThen: Number(r.n_then),
+      })),
+    };
+  },
+);
+
+export const usageDeltasQueryOptions = () =>
+  queryOptions({ queryKey: ["usageDeltas"], queryFn: () => fetchUsageDeltas() });

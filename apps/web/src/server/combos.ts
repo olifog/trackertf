@@ -82,6 +82,41 @@ export interface ComboPage {
 const PAGE_SIZE = 100;
 const LETTERS = ["a", "b", "c", "d"] as const;
 
+/**
+ * PDA/builder pseudo-items every player of a class "equips" (~100% rows), so
+ * they swamp the real combos. Excluded from combos entirely — the same set the
+ * usage page hides by default. Identified by schema name (not slot), matching
+ * usage's PDA_NAMES.
+ */
+const PDA_NAMES = [
+  "TF_WEAPON_PDA_ENGINEER_BUILD",
+  "TF_WEAPON_PDA_ENGINEER_DESTROY",
+  "TF_WEAPON_PDA_SPY",
+  "TF_WEAPON_BUILDER",
+  "TF_WEAPON_BUILDER_SPY",
+] as const;
+
+let pdaGidsCache: Promise<number[]> | undefined;
+/**
+ * Group ids (reskin_group ?? defindex) of every PDA/builder item. weapon_gids
+ * stores these collapsed group ids, so excluding them here stops any combo from
+ * forming out of a PDA slot; the remaining loadout (primary/secondary/melee +
+ * spy sapper + watch) drives the recomputed shares. Spy's sapper is itself a
+ * builder so it's also excluded, leaving only the watch for spy. Cached — PDA
+ * identity is stable. Empty result is safe: `x NOT IN []` is true for all x.
+ */
+function fetchPdaGids(): Promise<number[]> {
+  pdaGidsCache ??= getDb()
+    .select({
+      defindex: schema.itemSchema.defindex,
+      reskinGroup: schema.itemSchema.reskinGroup,
+    })
+    .from(schema.itemSchema)
+    .where(inArray(schema.itemSchema.name, [...PDA_NAMES]))
+    .then((rows) => [...new Set(rows.map((r) => r.reskinGroup ?? r.defindex))]);
+  return pdaGidsCache;
+}
+
 /** counts come back as UInt64 → JSON strings; gids (UInt32) arrive as numbers */
 interface RawComboRow {
   gids: number[];
@@ -108,6 +143,8 @@ function buildComboQuery(size: number, classNum: number, compare: boolean, sort:
   const gidsArr = `[${letters.join(", ")}] AS gids`;
   const groupBy = letters.join(", ");
   const classFilter = classNum === -1 ? "" : "AND class_num = {cls:UInt8}";
+  // drop any combo that would form out of a PDA/builder slot (see fetchPdaGids)
+  const pdaFilter = letters.map((l) => `${l} NOT IN {pdas:Array(UInt32)}`).join(" AND ");
 
   if (compare) {
     const orderBy =
@@ -120,7 +157,7 @@ function buildComboQuery(size: number, classNum: number, compare: boolean, sort:
              countIf(lifetime_min >= {minB:UInt32}) AS cntB
       FROM loadout
       ${joins}
-      WHERE lifetime_min >= {minFloor:UInt32} ${classFilter} AND ${chain}
+      WHERE lifetime_min >= {minFloor:UInt32} ${classFilter} AND ${chain} AND ${pdaFilter}
       GROUP BY ${groupBy}
       HAVING (cntA + cntB) >= 2
       ORDER BY ${orderBy}
@@ -130,7 +167,7 @@ function buildComboQuery(size: number, classNum: number, compare: boolean, sort:
     SELECT ${gidsArr}, count() AS cntA
     FROM loadout
     ${joins}
-    WHERE lifetime_min >= {minA:UInt32} ${classFilter} AND ${chain}
+    WHERE lifetime_min >= {minA:UInt32} ${classFilter} AND ${chain} AND ${pdaFilter}
     GROUP BY ${groupBy}
     HAVING cntA >= 2
     ORDER BY cntA DESC, ${groupBy}
@@ -153,16 +190,23 @@ export const fetchCombos = createServerFn({ method: "GET" })
   .validator(comboPageSchema)
   .handler(async ({ data }): Promise<ComboPage> => {
     const { offset, class: classNum, minutes: minA, minutesB: minB, compare, sort } = data;
-    // size 4 only makes sense for Engineer (6 weapon slots incl PDAs); clamp otherwise
-    const size = data.size === 4 && classNum !== 9 ? 3 : data.size;
+    // With PDAs excluded no class has 4 real weapon slots (Engineer's 4th was a
+    // PDA), so a size-4 combo can never form — clamp it to triples everywhere.
+    const size = data.size === 4 ? 3 : data.size;
     const effectiveSort = compare ? sort : "usage";
 
-    const [popA, popB] = await Promise.all([
+    const [popA, popB, pdaGids] = await Promise.all([
       fetchPop(classNum, minA),
       compare ? fetchPop(classNum, minB) : Promise.resolve<number | null>(null),
+      fetchPdaGids(),
     ]);
 
-    const params: Record<string, unknown> = { minA, lim: PAGE_SIZE + 1, off: offset };
+    const params: Record<string, unknown> = {
+      minA,
+      lim: PAGE_SIZE + 1,
+      off: offset,
+      pdas: pdaGids,
+    };
     if (classNum !== -1) params["cls"] = classNum;
     if (compare) {
       params["minB"] = minB;

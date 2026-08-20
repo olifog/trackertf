@@ -1,6 +1,7 @@
-import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { FilterRow, Segmented } from "#/components/ui/filter-bar";
 import { Slider } from "#/components/ui/slider";
 import { Switch } from "#/components/ui/switch";
 import {
@@ -11,7 +12,20 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
-import { type UsageRow, usageFiltersSchema, usageInfiniteQueryOptions } from "#/server/usage";
+import { qualityColor } from "#/lib/quality";
+import { formatPValue, twoProportionZTest } from "#/lib/stats";
+import {
+  type StrangeShare,
+  strangeSharesQueryOptions,
+  type UsageDelta,
+  type UsageRow,
+  usageDeltasQueryOptions,
+  usageFiltersSchema,
+  usageInfiniteQueryOptions,
+} from "#/server/usage";
+
+/** Strange quality color (#CF6A32), resolved once for the strange-share bars. */
+const STRANGE_COLOR = qualityColor(11);
 
 const DEFAULT_FILTERS = {
   class: -1,
@@ -147,14 +161,6 @@ function displayName(item: UsageRow): string {
 
 type SearchPatch = Partial<ReturnType<typeof Route.useSearch>>;
 
-function Segmented({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="inline-flex overflow-hidden rounded-md border divide-x divide-border">
-      {children}
-    </div>
-  );
-}
-
 function Segment({
   children,
   active,
@@ -171,7 +177,7 @@ function Segment({
       from={Route.fullPath}
       search={(prev) => ({ ...prev, ...patch })}
       title={title}
-      className={`flex h-8 items-center px-2.5 text-[13px] leading-none transition-colors ${
+      className={`flex h-9 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
         active
           ? "bg-primary font-medium text-primary-foreground"
           : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
@@ -179,17 +185,6 @@ function Segment({
     >
       {children}
     </Link>
-  );
-}
-
-function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="w-16 shrink-0 text-right font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
-        {label}
-      </span>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">{children}</div>
-    </div>
   );
 }
 
@@ -215,6 +210,24 @@ function SwitchFilter({
   );
 }
 
+/** Switch bound to local component state (display overlay, not a URL filter). */
+function LocalSwitch({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 text-[13px] text-secondary-foreground">
+      <Switch size="sm" checked={checked} onCheckedChange={onChange} />
+      {label}
+    </label>
+  );
+}
+
 /** slider over discrete precomputed stops; drags snap, labels jump on click */
 function StopSlider({
   stops,
@@ -235,7 +248,7 @@ function StopSlider({
   const commit = (i: number) =>
     void navigate({ search: (prev) => ({ ...prev, ...patch(stops[i]?.value ?? 0) }) });
   return (
-    <div className="w-64 pt-1">
+    <div className="w-full max-w-72 pt-1">
       <Slider
         value={[index]}
         min={0}
@@ -273,6 +286,34 @@ function UsagePage() {
   });
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
   const [filter, setFilter] = useState("");
+  // Display overlays (local, not URL): they don't change the usage query.
+  const [strange, setStrange] = useState(false);
+  const [compare, setCompare] = useState(false);
+
+  // Deltas are only tracked for the default headline view.
+  const isHeadline =
+    search.class === -1 &&
+    search.slot === -1 &&
+    search.active === 0 &&
+    search.minutes === 0 &&
+    search.merge;
+
+  const strangeQuery = useQuery({ ...strangeSharesQueryOptions(), enabled: strange });
+  const strangeByGid = useMemo(() => {
+    const m = new Map<number, StrangeShare>();
+    for (const s of strangeQuery.data ?? []) m.set(s.gid, s);
+    return m;
+  }, [strangeQuery.data]);
+
+  const deltaQuery = useQuery({
+    ...usageDeltasQueryOptions(),
+    enabled: compare && isHeadline,
+  });
+  const deltaByDef = useMemo(() => {
+    const m = new Map<number, UsageDelta>();
+    for (const d of deltaQuery.data?.deltas ?? []) m.set(d.defindex, d);
+    return m;
+  }, [deltaQuery.data]);
 
   const pages = query.data?.pages;
   const rows = useMemo(() => pages?.flatMap((p) => p.rows) ?? [], [pages]);
@@ -326,7 +367,7 @@ function UsagePage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-baseline justify-between">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1 className="font-heading text-2xl font-bold">Weapon usage</h1>
         {sample !== null && sample !== undefined && (
           <p className="font-mono text-xs text-muted-foreground">
@@ -410,8 +451,30 @@ function UsagePage() {
             checked={!search.pdas}
             patch={(next) => ({ pdas: !next })}
           />
+          <LocalSwitch label="Strange share" checked={strange} onChange={setStrange} />
+          <LocalSwitch label="Compare (7d)" checked={compare} onChange={setCompare} />
         </FilterRow>
       </div>
+
+      {compare && !isHeadline && (
+        <p className="text-xs text-muted-foreground">
+          Deltas are tracked for the default view only — reset Class, Slot, Hours and Active to
+          "Any"/"All" (merged) to compare.
+        </p>
+      )}
+      {compare && isHeadline && deltaQuery.data && !deltaQuery.data.enoughHistory && (
+        <p className="text-xs text-muted-foreground">
+          Deltas accrue daily
+          {deltaQuery.data.comparisonDay && <> — first snapshot {deltaQuery.data.comparisonDay}</>}.
+          Check back in a few days.
+        </p>
+      )}
+      {compare && isHeadline && deltaQuery.data?.enoughHistory && (
+        <p className="text-xs text-muted-foreground">
+          Usage change vs {deltaQuery.data.comparisonDay} ({deltaQuery.data.days}d), in percentage
+          points.
+        </p>
+      )}
 
       {items.length === 0 && !query.isFetching ? (
         <p className="text-muted-foreground">
@@ -419,16 +482,21 @@ function UsagePage() {
         </p>
       ) : (
         <div className="relative">
-          <Table className="table-fixed">
+          <Table className="md:table-fixed">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead className="w-10 text-right">#</TableHead>
                 <TableHead className="w-9" />
-                <TableHead>Item</TableHead>
-                {search.class === -1 && <TableHead className="w-27">Classes</TableHead>}
-                {search.slot === -1 && <TableHead className="w-22">Slot</TableHead>}
+                <TableHead className="min-w-[9rem]">Item</TableHead>
+                {search.class === -1 && (
+                  <TableHead className="hidden w-27 sm:table-cell">Classes</TableHead>
+                )}
+                {search.slot === -1 && (
+                  <TableHead className="hidden w-22 sm:table-cell">Slot</TableHead>
+                )}
                 <TableHead className="w-18 text-right">Players</TableHead>
                 <TableHead className="w-38 text-right">Usage</TableHead>
+                {strange && <TableHead className="w-32 text-right">Strange</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -457,6 +525,9 @@ function UsagePage() {
                     onToggle={() => toggleExpand(item.defindex)}
                     showClasses={search.class === -1}
                     showSlot={search.slot === -1}
+                    showStrange={strange}
+                    strange={strange ? strangeByGid.get(item.reskinGroup ?? item.defindex) : undefined}
+                    delta={compare && isHeadline ? deltaByDef.get(item.defindex) : undefined}
                   />
                 );
               })}
@@ -530,6 +601,9 @@ function ItemRows({
   onToggle,
   showClasses,
   showSlot,
+  showStrange,
+  strange,
+  delta,
 }: {
   item: UsageRow;
   rank: number;
@@ -539,6 +613,9 @@ function ItemRows({
   onToggle: () => void;
   showClasses: boolean;
   showSlot: boolean;
+  showStrange: boolean;
+  strange?: StrangeShare | undefined;
+  delta?: UsageDelta | undefined;
 }) {
   const extraCols = (showClasses ? 1 : 0) + (showSlot ? 1 : 0);
   return (
@@ -561,12 +638,12 @@ function ItemRows({
           )}
         </TableCell>
         {showClasses && (
-          <TableCell className="py-1">
+          <TableCell className="hidden py-1 sm:table-cell">
             <ClassIcons classes={item.usedByClasses} />
           </TableCell>
         )}
         {showSlot && (
-          <TableCell className="overflow-hidden py-1 text-xs text-ellipsis text-muted-foreground">
+          <TableCell className="hidden overflow-hidden py-1 text-xs text-ellipsis text-muted-foreground sm:table-cell">
             {item.slotName ? (SLOT_DISPLAY[item.slotName] ?? item.slotName) : ""}
           </TableCell>
         )}
@@ -574,8 +651,20 @@ function ItemRows({
           {item.count.toLocaleString()}
         </TableCell>
         <TableCell className="py-1">
-          <UsageBar usage={item.usage} />
+          <div className="flex items-center justify-end gap-2">
+            {delta && <DeltaBadge d={delta} />}
+            <UsageBar usage={item.usage} />
+          </div>
         </TableCell>
+        {showStrange && (
+          <TableCell className="py-1">
+            {strange ? (
+              <StrangeBar share={strange.strangeShare} />
+            ) : (
+              <span className="block text-right font-mono text-xs text-muted-foreground/40">—</span>
+            )}
+          </TableCell>
+        )}
       </TableRow>
       {isOpen &&
         variants.map((v) => (
@@ -603,6 +692,7 @@ function ItemRows({
             <TableCell className="py-0.5">
               <UsageBar usage={v.usage} dim />
             </TableCell>
+            {showStrange && <TableCell className="py-0.5" />}
           </TableRow>
         ))}
     </>
@@ -626,6 +716,62 @@ function UsageBar({ usage, dim }: { usage: number; dim?: boolean }) {
         {(usage * 100).toFixed(1)}%
       </span>
     </div>
+  );
+}
+
+/** Strange-share bar — same shape as UsageBar but in the Strange quality color. */
+function StrangeBar({ share }: { share: number }) {
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-secondary">
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${Math.min(share * 100, 100)}%`, backgroundColor: STRANGE_COLOR }}
+        />
+      </div>
+      <span className="w-12 shrink-0 text-right font-mono text-xs tabular-nums">
+        {(share * 100).toFixed(1)}%
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Signed week-over-week usage change, in percentage points. A two-proportion
+ * z-test (shared helper) over the raw equip counts / population sizes decides
+ * whether the shift is real: significant deltas get full up/down coloring,
+ * non-significant ones are greyed with an "ns" tag so tiny-sample or
+ * bot-inflated noise can't masquerade as a trend. The p-value and both
+ * count/population pairs live in the tooltip.
+ */
+function DeltaBadge({ d }: { d: UsageDelta }) {
+  const test = twoProportionZTest(d.countNow, d.sampleSizeNow, d.countThen, d.sampleSizeThen);
+  const pp = d.delta * 100;
+  const arrow = d.delta > 0 ? "▲" : d.delta < 0 ? "▼" : "–";
+  const title =
+    `${formatPValue(test.pValue, test.significant)} · ` +
+    `now ${d.countNow.toLocaleString()}/${d.sampleSizeNow.toLocaleString()} · ` +
+    `then ${d.countThen.toLocaleString()}/${d.sampleSizeThen.toLocaleString()}`;
+  if (!test.significant) {
+    return (
+      <span
+        title={title}
+        className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground/50 tabular-nums"
+      >
+        {arrow}
+        {Math.abs(pp).toFixed(2)}
+        <span className="text-[9px] tracking-wider uppercase">ns</span>
+      </span>
+    );
+  }
+  return (
+    <span
+      title={title}
+      className={`font-mono text-[11px] tabular-nums ${d.delta > 0 ? "text-emerald-400" : "text-red-400"}`}
+    >
+      {arrow}
+      {Math.abs(pp).toFixed(2)}
+    </span>
   );
 }
 

@@ -46,6 +46,38 @@ const CLASS_ORDER = [1, 3, 7, 4, 6, 9, 5, 2, 8];
 // inlined here to avoid adding a cross-package dependency to the web app.
 const STRANGE_QUALITY = 11;
 const HALE_OWN_KILLS = 25000;
+// Kill-eater rank tiers, ascending by min. Top rank is "Hale's Own" at 25000.
+const STRANGE_RANKS: readonly { min: number; name: string }[] = [
+  { min: 0, name: "Strange" },
+  { min: 10, name: "Unremarkable" },
+  { min: 25, name: "Scarcely Lethal" },
+  { min: 45, name: "Mildly Menacing" },
+  { min: 70, name: "Somewhat Threatening" },
+  { min: 100, name: "Uncharitable" },
+  { min: 135, name: "Notably Dangerous" },
+  { min: 175, name: "Sufficiently Lethal" },
+  { min: 225, name: "Truly Feared" },
+  { min: 275, name: "Spectacularly Lethal" },
+  { min: 350, name: "Gore-Spattered" },
+  { min: 500, name: "Wicked Nasty" },
+  { min: 750, name: "Positively Inhumane" },
+  { min: 999, name: "Totally Ordinary" },
+  { min: 1000, name: "Face-Melting" },
+  { min: 1500, name: "Rage-Inducing" },
+  { min: 2500, name: "Server-Clearing" },
+  { min: 5000, name: "Epic" },
+  { min: 7500, name: "Legendary" },
+  { min: 12500, name: "Australian" },
+  { min: 25000, name: "Hale's Own" },
+];
+function strangeRank(kills: number): string {
+  let name = STRANGE_RANKS[0]!.name;
+  for (const tier of STRANGE_RANKS) {
+    if (kills >= tier.min) name = tier.name;
+    else break;
+  }
+  return name;
+}
 function haleOwnPct(kills: number): number {
   return Math.min(100, (kills / HALE_OWN_KILLS) * 100);
 }
@@ -112,13 +144,13 @@ function PlayerPage() {
               <TableRow className="hover:bg-transparent">
                 <TableHead>Class</TableHead>
                 <TableHead className="text-right">Hours</TableHead>
-                <TableHead className="text-right">Share</TableHead>
+                <TableHead className="hidden text-right md:table-cell">Share</TableHead>
                 <TableHead className="text-right">Kills</TableHead>
                 <TableHead className="text-right">Kills / hr</TableHead>
                 <TableHead className="text-right">Points / min</TableHead>
-                <TableHead className="text-right">Dmg / min</TableHead>
-                <TableHead className="text-right">Assists</TableHead>
-                <TableHead className="text-right">Caps</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Dmg / min</TableHead>
+                <TableHead className="hidden text-right md:table-cell">Assists</TableHead>
+                <TableHead className="hidden text-right md:table-cell">Caps</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -135,7 +167,7 @@ function PlayerPage() {
                   <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
                     {(c.playtimeSeconds / 3600).toFixed(0)}
                   </TableCell>
-                  <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                  <TableCell className="hidden py-1 text-right font-mono text-xs tabular-nums text-muted-foreground md:table-cell">
                     {totalClassSeconds > 0
                       ? `${((c.playtimeSeconds / totalClassSeconds) * 100).toFixed(0)}%`
                       : "-"}
@@ -153,15 +185,15 @@ function PlayerPage() {
                       ? ((c.pointsScored * 60) / c.playtimeSeconds).toFixed(2)
                       : "-"}
                   </TableCell>
-                  <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+                  <TableCell className="hidden py-1 text-right font-mono text-sm tabular-nums sm:table-cell">
                     {c.playtimeSeconds > 0
                       ? ((c.damageDealt * 60) / c.playtimeSeconds).toFixed(0)
                       : "-"}
                   </TableCell>
-                  <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                  <TableCell className="hidden py-1 text-right font-mono text-xs tabular-nums text-muted-foreground md:table-cell">
                     {c.killAssists.toLocaleString()}
                   </TableCell>
-                  <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                  <TableCell className="hidden py-1 text-right font-mono text-xs tabular-nums text-muted-foreground md:table-cell">
                     {c.captures.toLocaleString()}
                   </TableCell>
                 </TableRow>
@@ -293,8 +325,11 @@ function PlayerPage() {
                         </div>
                         {e.quality === STRANGE_QUALITY && e.strangeKills > 0 && (
                           <div className="pl-7 font-mono text-[10px] text-muted-foreground">
-                            {e.strangeKills.toLocaleString()} kills · {haleOwnPct(e.strangeKills).toFixed(1)}% to
-                            Hale's Own
+                            <span style={{ color: qualityColor(STRANGE_QUALITY) }}>
+                              {strangeRank(e.strangeKills)}
+                            </span>{" "}
+                            · {e.strangeKills.toLocaleString()} kills ·{" "}
+                            {haleOwnPct(e.strangeKills).toFixed(1)}% to Hale's Own
                           </div>
                         )}
                       </li>

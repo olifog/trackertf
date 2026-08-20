@@ -2,9 +2,12 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts";
 import { z } from "zod";
+import { Segmented } from "#/components/ui/filter-bar";
 import {
   ChartContainer,
   type ChartConfig,
+  ChartLegend,
+  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
 } from "#/components/ui/chart";
@@ -100,7 +103,8 @@ const trendConfig = Object.fromEntries(
 ) satisfies ChartConfig;
 
 const rushConfig = {
-  players: { label: "Avg players", color: "var(--chart-1)" },
+  official: { label: "Official", color: "var(--chart-1)" },
+  community: { label: "Community", color: "var(--chart-3)" },
 } satisfies ChartConfig;
 
 function fmtAxis(unixSec: number, range: TrendRange): string {
@@ -108,14 +112,6 @@ function fmtAxis(unixSec: number, range: TrendRange): string {
   return range === "24h"
     ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-function Segmented({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="inline-flex divide-x divide-border overflow-hidden rounded-md border">
-      {children}
-    </div>
-  );
 }
 
 function Segment({
@@ -131,7 +127,7 @@ function Segment({
     <Link
       from={Route.fullPath}
       search={{ range }}
-      className={`flex h-8 items-center px-2.5 text-[13px] leading-none transition-colors ${
+      className={`flex h-9 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
         active
           ? "bg-primary font-medium text-primary-foreground"
           : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
@@ -283,8 +279,8 @@ function TagBars({ tags }: { tags: TagStat[] }) {
           dataKey="label"
           tickLine={false}
           axisLine={false}
-          width={140}
-          tick={{ fontSize: 11 }}
+          width={96}
+          tick={{ fontSize: 10 }}
         />
         <ChartTooltip content={<ChartTooltipContent />} />
         <Bar dataKey="count" fill="var(--color-count)" radius={4} />
@@ -323,7 +319,11 @@ function ContinentPie({ data }: { data: ContinentRow[] }) {
   );
 }
 
-function RushHourChart({ data }: { data: { hour: number; players: number }[] }) {
+function RushHourChart({
+  data,
+}: {
+  data: { hour: number; official: number; community: number }[];
+}) {
   if (data.length === 0) {
     return (
       <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
@@ -340,7 +340,8 @@ function RushHourChart({ data }: { data: { hour: number; players: number }[] }) 
           tickLine={false}
           axisLine={false}
           tickMargin={8}
-          interval={1}
+          interval="preserveStartEnd"
+          minTickGap={24}
           tickFormatter={(v) => `${String(v).padStart(2, "0")}:00`}
         />
         <YAxis
@@ -357,7 +358,9 @@ function RushHourChart({ data }: { data: { hour: number; players: number }[] }) 
             />
           }
         />
-        <Bar dataKey="players" fill="var(--color-players)" radius={[3, 3, 0, 0]} />
+        <ChartLegend content={<ChartLegendContent />} />
+        <Bar dataKey="official" stackId="p" fill="var(--color-official)" />
+        <Bar dataKey="community" stackId="p" fill="var(--color-community)" radius={[3, 3, 0, 0]} />
       </BarChart>
     </ChartContainer>
   );
@@ -379,7 +382,7 @@ function ServersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-baseline justify-between">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1 className="font-heading text-2xl font-bold">Servers</h1>
         {overview.scannedAt && (
           <p className="font-mono text-xs text-muted-foreground" suppressHydrationWarning>

@@ -20,6 +20,96 @@ const POPULATIONS = HOURS_BUCKETS.flatMap((minutes) =>
   ACTIVE_2WK_BUCKETS.map((active2wk) => ({ minutes, active2wk })),
 );
 
+/**
+ * Per-player "botness" float in [0,1] written to players.botness, recomputed
+ * every pass from player_class_stats (rates, playtime, hack markers) and
+ * equipped_items (zero-effort loadout tell). Excludes junk accounts — idle
+ * bots, stat-hackers, corrupted profiles — from usage aggregates and
+ * leaderboards. Full derivation + measured thresholds in docs/botness-signals.md.
+ *
+ * Runs BEFORE recompute()/recomputeWeaponStats()/recomputeLeaderboards() so
+ * those passes read this run's freshly-written scores (same-pass consistency).
+ * Only players with class stats are scored; players without stay NULL = included
+ * (absence of evidence is not a flag).
+ *
+ * Signals: (1) impossible per-class rates, (2) hack-marker saturation values,
+ * (3) impossible playtime ceilings, (4) idle shape (points-based, so real
+ * medics aren't flagged), (5) all-stock melee on engaged classes (gated on real
+ * per-class playtime, since equipped stock is backfilled for every class/slot).
+ * Hard flags (1/2/3 at their impossible caps) force 1.0; the rest are graded
+ * sub-scores combined via a weighted noisy-OR (w: rate .9, time .8, idle .9,
+ * stock .4). Cutoff for exclusion is botness >= 0.5.
+ */
+async function recomputeBotness(): Promise<void> {
+  await db.execute(sql`
+    with class_agg as (
+      select
+        c.steamid,
+        sum(c.playtime_seconds) as total_secs,
+        max(c.playtime_seconds) as max_class_secs,
+        -- hack-marker saturation: INT32 max (2^31-1) or the ~1e9 offset
+        max(case when c.kills >= 1000000000 or c.kills = 2147483647
+                   or c.points_scored >= 1000000000 or c.points_scored = 2147483647
+                   or c.damage_dealt >= 1000000000 or c.damage_dealt = 2147483647
+                   or c.kill_assists >= 1000000000 or c.kill_assists = 2147483647
+              then 1 else 0 end) as hack,
+        -- physically-impossible per-class rate (>= 1h denominator)
+        max(case when c.playtime_seconds >= 3600 and (
+                   c.kills::float8 * 3600 / c.playtime_seconds > 1500
+                or c.damage_dealt::float8 * 60 / c.playtime_seconds > 3000
+                or c.points_scored::float8 * 60 / c.playtime_seconds > 30)
+              then 1 else 0 end) as rate_hard,
+        -- graded rate suspicion: max over classes of the per-metric ramp from
+        -- ~p99 up to the hard cap (kph 600->1500, dpm 700->3000, ppm 6->30)
+        max(case when c.playtime_seconds >= 3600 then greatest(
+                 least(greatest((c.kills::float8 * 3600 / c.playtime_seconds - 600) / 900, 0), 1),
+                 least(greatest((c.damage_dealt::float8 * 60 / c.playtime_seconds - 700) / 2300, 0), 1),
+                 least(greatest((c.points_scored::float8 * 60 / c.playtime_seconds - 6) / 24, 0), 1))
+              else 0 end) as s_rate,
+        -- idle shape: lowest points/hr among the player's 100h+ classes
+        min(case when c.playtime_seconds >= 360000
+              then c.points_scored::float8 * 3600 / c.playtime_seconds end) as min_pph_100h
+      from player_class_stats c
+      group by c.steamid
+    ),
+    -- zero-effort loadout tell: real stock melee (raw defindex, not gid — a
+    -- reskin is still a choice) on classes the player has actually played (>=10h)
+    stock_melee(class_num, def) as (
+      values (1, 0), (2, 3), (3, 6), (4, 1), (5, 8), (6, 5), (7, 2), (8, 4), (9, 7)
+    ),
+    stock_agg as (
+      select e.steamid,
+        count(*) filter (where pcs.playtime_seconds >= 36000)::int as played_classes,
+        count(*) filter (where pcs.playtime_seconds >= 36000 and e.defindex = sm.def)::int as stock_classes
+      from equipped_items e
+      join stock_melee sm on sm.class_num = e.class_num
+      join player_class_stats pcs on pcs.steamid = e.steamid and pcs.class_num = e.class_num
+      where e.slot = 2
+      group by e.steamid
+    )
+    update players p set botness = sub.botness
+    from (
+      select ca.steamid,
+        case
+          when ca.hack = 1 or ca.rate_hard = 1
+            or ca.total_secs > 30000 * 3600 or ca.max_class_secs > 30000 * 3600
+          then 1.0
+          else 1 - (
+            (1 - 0.9 * coalesce(ca.s_rate, 0))
+            * (1 - 0.8 * least(greatest((ca.total_secs / 3600.0 - 15000) / 15000, 0), 1))
+            * (1 - 0.9 * case when ca.min_pph_100h is not null
+                 then least(greatest((5 - ca.min_pph_100h) / 3.0, 0), 1) else 0 end)
+            * (1 - 0.4 * case when ca.total_secs >= 300 * 3600 and coalesce(sa.played_classes, 0) > 0
+                 then sa.stock_classes::float8 / sa.played_classes else 0 end)
+          )
+        end as botness
+      from class_agg ca
+      left join stock_agg sa on sa.steamid = ca.steamid
+    ) sub
+    where p.steamid = sub.steamid
+  `);
+}
+
 async function recompute(): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.execute(sql`delete from usage_stats`);
@@ -30,6 +120,7 @@ async function recompute(): Promise<void> {
           where p.items_status = 'ok'
             and coalesce(p.tf2_minutes_2wk, 0) >= ${pop.active2wk}
             and coalesce(p.tf2_minutes, 0) > ${pop.minutes}
+            and coalesce(p.botness, 0) < 0.5
         ),
         total as (select count(*)::int n from pop),
         pan_group as (
@@ -124,6 +215,28 @@ async function recompute(): Promise<void> {
   });
 }
 
+/**
+ * Snapshot the default headline usage view (Any class · Any slot · all players ·
+ * merged) into usage_stats_history, one row per group keyed on today's UTC date.
+ * Runs every cycle and upserts, so the day's row holds its latest value; this
+ * powers the /usage delta-compare feature. Additive — no backfill, history
+ * accrues from first deploy. Only the headline slice is retained, so the table
+ * stays ~one row per item per day rather than mirroring the full usage cube.
+ */
+async function recordUsageHistory(): Promise<void> {
+  await db.execute(sql`
+    insert into usage_stats_history (defindex, day, usage, count, sample_size)
+    select defindex, timezone('UTC', now())::date, usage, count, sample_size
+    from usage_stats
+    where class_num = -1 and slot = -1 and active_minutes_2wk = 0
+      and minutes_threshold = 0 and merge_reskins = true
+    on conflict (defindex, day) do update
+      set usage = excluded.usage,
+          count = excluded.count,
+          sample_size = excluded.sample_size
+  `);
+}
+
 /** avg points/min, kills/hr, dmg/min of players equipping each weapon group
  * per class (10h+ on the class, weapons slots only, class-aware merge ids) */
 async function recomputeWeaponStats(): Promise<void> {
@@ -149,8 +262,10 @@ async function recomputeWeaponStats(): Promise<void> {
         now()
       from equipped_items e
       join player_class_stats p on p.steamid = e.steamid and p.class_num = e.class_num
+      join players pl on pl.steamid = e.steamid
       left join item_schema s on s.defindex = e.defindex
       where e.slot <= 6 and p.playtime_seconds >= 36000
+        and coalesce(pl.botness, 0) < 0.5
       group by 1, 2
       having count(distinct e.steamid) >= 3
     `);
@@ -194,11 +309,13 @@ async function main(): Promise<void> {
   for (;;) {
     const start = Date.now();
     try {
+      await recomputeBotness();
       await recompute();
+      await recordUsageHistory();
       await recomputeWeaponStats();
       await recomputeLeaderboards();
       console.log(
-        `usage_stats + weapon_class_stats + leaderboard_entries recomputed in ${Date.now() - start}ms`,
+        `botness + usage_stats (+ history) + weapon_class_stats + leaderboard_entries recomputed in ${Date.now() - start}ms`,
       );
     } catch (err) {
       console.error("analyser run failed:", err);

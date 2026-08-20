@@ -1,6 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
+import { FilterRow, Segmented } from "#/components/ui/filter-bar";
 import { Slider } from "#/components/ui/slider";
 import {
   Table,
@@ -19,14 +20,50 @@ import {
   RATE_THRESHOLD_HOURS,
 } from "@trackertf/db/boards";
 import { avatarUrl, CLASS_NAMES } from "#/lib/tf2";
-import { leaderboardQueryOptions } from "#/server/leaderboards";
+import {
+  isStrangeBoard,
+  leaderboardQueryOptions,
+  STRANGE_BOARD_KEYS,
+} from "#/server/leaderboards";
+
+/**
+ * Strange-kill boards aren't part of the (metric, scope, kind) grid in
+ * boards.ts (their data lives only in ClickHouse), so their picker metadata is
+ * defined here as overall-scope, total-kind pseudo-boards.
+ */
+const STRANGE_BOARDS: BoardDef[] = [
+  {
+    key: STRANGE_BOARD_KEYS[0],
+    metric: "hours",
+    scope: "overall",
+    kind: "total",
+    label: "Most Strange kills (all equipped Strange weapons)",
+    shortLabel: "Strange kills",
+    valueLabel: "Strange kills",
+    decimals: 0,
+  },
+  {
+    key: STRANGE_BOARD_KEYS[1],
+    metric: "hours",
+    scope: "overall",
+    kind: "total",
+    label: "Highest single Strange counter",
+    shortLabel: "Top Strange item",
+    valueLabel: "Kills on item",
+    decimals: 0,
+  },
+];
+const STRANGE_MAP = new Map(STRANGE_BOARDS.map((b) => [b.key, b]));
+
+/** unified lookup: normal grid boards plus the CH-backed strange boards */
+function boardDef(key: string): BoardDef {
+  return (STRANGE_MAP.get(key) ?? BOARD_MAP.get(key)) as BoardDef;
+}
+
+const isKnownBoard = (key: string) => BOARD_MAP.has(key) || isStrangeBoard(key);
 
 const searchSchema = z.object({
-  board: z
-    .string()
-    .refine((key) => BOARD_MAP.has(key))
-    .catch("hours")
-    .default("hours"),
+  board: z.string().refine(isKnownBoard).catch("hours").default("hours"),
 });
 
 export const Route = createFileRoute("/leaderboards")({
@@ -68,14 +105,6 @@ function formatValue(value: number, decimals: number): string {
   });
 }
 
-function Segmented({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="inline-flex overflow-hidden rounded-md border divide-x divide-border">
-      {children}
-    </div>
-  );
-}
-
 function Segment({
   children,
   active,
@@ -90,9 +119,9 @@ function Segment({
   return (
     <Link
       from={Route.fullPath}
-      search={{ board }}
+      search={(prev) => ({ ...prev, board })}
       title={title}
-      className={`flex h-8 items-center px-2.5 text-[13px] leading-none transition-colors ${
+      className={`flex h-9 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
         active
           ? "bg-primary font-medium text-primary-foreground"
           : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
@@ -100,17 +129,6 @@ function Segment({
     >
       {children}
     </Link>
-  );
-}
-
-function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="w-16 shrink-0 text-right font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
-        {label}
-      </span>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">{children}</div>
-    </div>
   );
 }
 
@@ -124,10 +142,10 @@ function ThresholdSlider({ def }: { def: BoardDef }) {
   );
   const commit = (i: number) => {
     const next = RATE_THRESHOLD_HOURS[i] ?? DEFAULT_RATE_HOURS;
-    void navigate({ search: { board: boardKeyFor(def, def.scope, next) } });
+    void navigate({ search: (prev) => ({ ...prev, board: boardKeyFor(def, def.scope, next) }) });
   };
   return (
-    <div className="w-56 pt-1">
+    <div className="w-full max-w-72 pt-1">
       <Slider
         value={[index]}
         min={0}
@@ -155,61 +173,62 @@ function ThresholdSlider({ def }: { def: BoardDef }) {
 
 function LeaderboardsPage() {
   const { board } = Route.useSearch();
-  const navigate = useNavigate({ from: Route.fullPath });
   const { data } = useSuspenseQuery(leaderboardQueryOptions(board));
   const { rows, participants } = data;
-  const def = BOARD_MAP.get(board) as BoardDef;
+  const def = boardDef(board);
+  const strange = isStrangeBoard(board);
   const perClass = def.scope !== "overall";
   const currentHours = def.minRateHours ?? DEFAULT_RATE_HOURS;
 
-  // one select entry per (metric, kind) of the active scope — rate boards
-  // surface at the currently selected threshold, the slider swaps variants
-  const options = BOARDS.filter(
+  // one pill per (metric, kind) of the active scope — rate boards surface at
+  // the currently selected threshold, the slider swaps variants. Strange
+  // boards are overall-only, so they ride alongside the overall grid pills.
+  const gridOptions = BOARDS.filter(
     (b) => b.scope === def.scope && (b.kind === "total" || b.minRateHours === currentHours),
   );
+  const boardOptions =
+    def.scope === "overall" ? [...gridOptions, ...STRANGE_BOARDS] : gridOptions;
 
   return (
     <div className="space-y-5">
       <h1 className="font-heading text-2xl font-bold">Leaderboards</h1>
 
       <div className="space-y-3 rounded-lg border bg-card/50 p-4">
-        <FilterRow label="Class">
-          <Segmented>
-            <Segment
-              active={def.scope === "overall"}
-              board={boardKeyFor(def, "overall", currentHours)}
-            >
-              Overall
-            </Segment>
-            {CLASS_FILTER.map((c) => (
+        {!strange && (
+          <FilterRow label="Class">
+            <Segmented>
               <Segment
-                key={c.num}
-                active={def.scope === c.num}
-                board={boardKeyFor(def, c.num, currentHours)}
-                title={c.label}
+                active={def.scope === "overall"}
+                board={boardKeyFor(def, "overall", currentHours)}
               >
-                <img
-                  src={`/${c.label}.svg`}
-                  alt={c.label}
-                  className={`h-4.5 w-4.5 ${def.scope === c.num ? "" : "opacity-80"}`}
-                />
+                Overall
+              </Segment>
+              {CLASS_FILTER.map((c) => (
+                <Segment
+                  key={c.num}
+                  active={def.scope === c.num}
+                  board={boardKeyFor(def, c.num, currentHours)}
+                  title={c.label}
+                >
+                  <img
+                    src={`/${c.label}.svg`}
+                    alt={c.label}
+                    className={`h-4.5 w-4.5 ${def.scope === c.num ? "" : "opacity-80"}`}
+                  />
+                </Segment>
+              ))}
+            </Segmented>
+          </FilterRow>
+        )}
+
+        <FilterRow label="Board">
+          <Segmented>
+            {boardOptions.map((b) => (
+              <Segment key={b.key} active={b.key === board} board={b.key} title={b.label}>
+                {b.shortLabel}
               </Segment>
             ))}
           </Segmented>
-        </FilterRow>
-
-        <FilterRow label="Board">
-          <select
-            value={board}
-            onChange={(e) => void navigate({ search: { board: e.target.value } })}
-            className="h-8 max-w-full rounded-md border bg-secondary/40 px-2 text-[13px] text-secondary-foreground"
-          >
-            {options.map((b) => (
-              <option key={b.key} value={b.key}>
-                {b.shortLabel}
-              </option>
-            ))}
-          </select>
         </FilterRow>
 
         {def.kind === "per_hour" && (
@@ -225,6 +244,9 @@ function LeaderboardsPage() {
       <p className="text-xs text-muted-foreground">
         Among crawled players with public profiles, no VAC bans
         {participants !== null && <>, {participants.toLocaleString()} qualifying players</>}.
+        {strange && (
+          <> Counts come from players' currently equipped Strange (quality 11) items.</>
+        )}
         {def.kind === "per_hour" && <> Rate boards require {currentHours}+ hours on the scope.</>}{" "}
         Sample skews connected and veteran players.
       </p>

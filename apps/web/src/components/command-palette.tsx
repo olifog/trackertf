@@ -1,6 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
 import {
-  ActivityIcon,
   ArrowRightIcon,
   ChartBarIcon,
   GaugeIcon,
@@ -32,9 +31,8 @@ const PAGES = [
   { label: "Performance", to: "/performance", icon: GaugeIcon },
   { label: "Leaderboards", to: "/leaderboards", icon: TrophyIcon },
   { label: "Servers", to: "/servers", icon: ServerIcon },
-  { label: "Ecosystem", to: "/ecosystem", icon: GlobeIcon },
   { label: "Matches", to: "/matches", icon: RadioIcon },
-  { label: "Health", to: "/health", icon: ActivityIcon },
+  { label: "Data", to: "/health", icon: GlobeIcon },
 ] as const;
 
 /** steamid64 or steamcommunity profile URL → resolvable via lookupPlayer */

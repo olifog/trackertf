@@ -71,7 +71,8 @@ export interface GamemodeRow {
 export interface RushHourPoint {
   /** hour of day, 0-23, UTC */
   hour: number;
-  players: number;
+  official: number;
+  community: number;
 }
 
 export interface ServerTotals {
@@ -184,17 +185,24 @@ export const fetchServerOverview = createServerFn({ method: "GET" }).handler(
       order by players desc
     `)) as unknown as Record<string, unknown>[];
 
+    // Rush hour: average concurrent players per hour-of-day over the trailing
+    // 7 days, split official vs community. Inner query totals each scan so the
+    // outer average is over scans (concurrent players), not a sum of scans.
     const rushHourRaw = (await db.execute(sql`
-      select extract(hour from scanned_at)::int as hour,
-        round(avg(p))::int players
+      select hr,
+        round(avg(off))::int official,
+        round(avg(comm))::int community
       from (
-        select scanned_at, sum(players) p
+        select extract(hour from scanned_at at time zone 'UTC')::int hr,
+          scanned_at,
+          coalesce(sum(players) filter (where official), 0) off,
+          coalesce(sum(players) filter (where not official), 0) comm
         from server_snapshots
         where scanned_at > now() - interval '7 days'
         group by scanned_at
       ) s
-      group by 1
-      order by 1
+      group by hr
+      order by hr
     `)) as unknown as Record<string, unknown>[];
 
     const [totalsRaw] = (await db.execute(sql`
@@ -285,8 +293,9 @@ export const fetchServerOverview = createServerFn({ method: "GET" }).handler(
         servers: num(r["servers"]),
       })),
       rushHour: rushHourRaw.map((r) => ({
-        hour: num(r["hour"]),
-        players: num(r["players"]),
+        hour: num(r["hr"]),
+        official: num(r["official"]),
+        community: num(r["community"]),
       })),
     };
   },

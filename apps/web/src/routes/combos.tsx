@@ -1,6 +1,9 @@
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { bySlot } from "#/lib/slots";
+import { formatPValue, type ProportionTest, twoProportionZTest } from "#/lib/stats";
+import { FilterRow, Segmented } from "#/components/ui/filter-bar";
 import { Slider } from "#/components/ui/slider";
 import { Switch } from "#/components/ui/switch";
 import {
@@ -39,7 +42,19 @@ const CLASSES = [
   { num: 8, label: "Spy" },
 ] as const;
 
-const ENGINEER = 9;
+/**
+ * Stock/default weapon group ids (mirror of STOCK_ITEMS in
+ * apps/crawler/src/parse.ts, PDA/builder entries dropped since those never
+ * reach a combo). weapon_gids stores the reskin-collapsed cgid, and stock
+ * melees fold to the per-class pan cgid 0-8 — which are exactly the melee
+ * defindexes listed here — so a stock weapon's cgid equals its defindex. A
+ * combo whose every member is in this set is all-stock: high-hour bot/idle
+ * accounts that equip nothing inflate the stock population, so its share and
+ * (especially) its compare-mode delta are unreliable.
+ */
+const STOCK_GIDS = new Set([
+  13, 23, 0, 14, 16, 3, 18, 10, 6, 19, 20, 1, 17, 29, 8, 15, 11, 5, 21, 12, 2, 24, 4, 30, 9, 22, 7,
+]);
 
 /** lifetime-playtime experience stops (values = minutes thresholds) */
 const HOURS_STOPS = [
@@ -85,14 +100,6 @@ function displayName(item: ComboMember): string {
 
 type SearchPatch = Partial<ReturnType<typeof Route.useSearch>>;
 
-function Segmented({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="inline-flex overflow-hidden rounded-md border divide-x divide-border">
-      {children}
-    </div>
-  );
-}
-
 function Segment({
   children,
   active,
@@ -109,7 +116,7 @@ function Segment({
       from={Route.fullPath}
       search={(prev) => ({ ...prev, ...patch })}
       title={title}
-      className={`flex h-8 items-center px-2.5 text-[13px] leading-none transition-colors ${
+      className={`flex h-9 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
         active
           ? "bg-primary font-medium text-primary-foreground"
           : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
@@ -117,17 +124,6 @@ function Segment({
     >
       {children}
     </Link>
-  );
-}
-
-function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="w-16 shrink-0 text-right font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
-        {label}
-      </span>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">{children}</div>
-    </div>
   );
 }
 
@@ -173,7 +169,7 @@ function StopSlider({
   const commit = (i: number) =>
     void navigate({ search: (prev) => ({ ...prev, ...patch(stops[i]?.value ?? 0) }) });
   return (
-    <div className="w-64 pt-1">
+    <div className="w-full max-w-72 pt-1">
       <Slider
         value={[index]}
         min={0}
@@ -210,14 +206,32 @@ function CombosPage() {
     placeholderData: keepPreviousData,
   });
 
+  const [filter, setFilter] = useState("");
   const pages = query.data?.pages;
   const rows = useMemo(() => pages?.flatMap((p) => p.rows) ?? [], [pages]);
   const first = pages?.[0];
   const popA = first?.popA ?? null;
   const popB = first?.popB ?? null;
   const compare = search.compare;
-  // the server clamps size 4 to 3 off Engineer; reflect that in the picker too
-  const effectiveSize = search.size === 4 && search.class !== ENGINEER ? 3 : search.size;
+  // the server clamps size 4 to 3 (no class has 4 non-PDA weapon slots)
+  const effectiveSize = search.size === 4 ? 3 : search.size;
+
+  // client-side name search: keep a combo if ANY of its items matches
+  const needle = filter.trim().toLowerCase();
+  const visibleRows = useMemo(
+    () =>
+      needle
+        ? rows.filter((r) =>
+            r.members.some(
+              (m) =>
+                displayName(m).toLowerCase().includes(needle) ||
+                (m.name ?? "").toLowerCase().includes(needle) ||
+                String(m.defindex).includes(needle),
+            ),
+          )
+        : rows,
+    [rows, needle],
+  );
 
   // infinite scroll: sentinel below the table pulls the next page into view
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -237,7 +251,7 @@ function CombosPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-baseline justify-between">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <div>
           <h1 className="font-heading text-2xl font-bold">Weapon combos</h1>
           <p className="text-sm text-muted-foreground">
@@ -260,21 +274,14 @@ function CombosPage() {
       <div className="space-y-3 rounded-lg border bg-card/50 p-4">
         <FilterRow label="Class">
           <Segmented>
-            <Segment
-              active={search.class === -1}
-              patch={{ class: -1, ...(search.size === 4 ? { size: 3 } : {}) }}
-              title="All classes (pooled)"
-            >
+            <Segment active={search.class === -1} patch={{ class: -1 }} title="All classes (pooled)">
               All
             </Segment>
             {CLASSES.map((c) => (
               <Segment
                 key={c.num}
                 active={search.class === c.num}
-                patch={{
-                  class: c.num,
-                  ...(c.num !== ENGINEER && search.size === 4 ? { size: 3 } : {}),
-                }}
+                patch={{ class: c.num }}
                 title={c.label}
               >
                 <img
@@ -295,11 +302,6 @@ function CombosPage() {
             <Segment active={effectiveSize === 3} patch={{ size: 3 }} title="Triples">
               3
             </Segment>
-            {search.class === ENGINEER && (
-              <Segment active={effectiveSize === 4} patch={{ size: 4 }} title="Quads (Engineer)">
-                4
-              </Segment>
-            )}
           </Segmented>
           <span className="text-[11px] text-muted-foreground">weapons run together</span>
         </FilterRow>
@@ -324,6 +326,15 @@ function CombosPage() {
           </FilterRow>
         )}
 
+        <FilterRow label="Search">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="item name / schema name / defindex…"
+            className="h-8 w-64 rounded-md border bg-secondary/40 px-2 font-mono text-xs outline-none placeholder:text-muted-foreground/60 focus:border-ring"
+          />
+        </FilterRow>
+
         <FilterRow label="Options">
           <SwitchFilter
             label="Compare experience"
@@ -346,17 +357,19 @@ function CombosPage() {
         </FilterRow>
       </div>
 
-      {rows.length === 0 && !query.isFetching ? (
+      {visibleRows.length === 0 && !query.isFetching ? (
         <p className="text-muted-foreground">
-          No combos yet for this filter combination. The crawler is warming up.
+          {needle
+            ? "No combos match that search."
+            : "No combos yet for this filter combination. The crawler is warming up."}
         </p>
       ) : (
         <div className="relative">
-          <Table className="table-fixed">
+          <Table className="md:table-fixed">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead className="w-10 text-right">#</TableHead>
-                <TableHead>Combo</TableHead>
+                <TableHead className="min-w-[9rem]">Combo</TableHead>
                 {compare ? (
                   <>
                     <TableHead className="w-40 text-right">
@@ -376,12 +389,14 @@ function CombosPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row, index) => (
+              {visibleRows.map((row, index) => (
                 <ComboRowView
                   key={row.gids.join("-")}
                   row={row}
                   rank={index + 1}
                   compare={compare}
+                  popA={popA}
+                  popB={popB}
                 />
               ))}
             </TableBody>
@@ -405,9 +420,11 @@ function CombosPage() {
 }
 
 function ComboMembers({ members }: { members: ComboMember[] }) {
+  // order items by canonical slot so both pages read the same left-to-right
+  const ordered = bySlot(members);
   return (
     <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-      {members.map((m, i) => (
+      {ordered.map((m, i) => (
         <span key={m.defindex} className="flex items-center gap-1">
           {i > 0 && <span className="mr-1 font-mono text-muted-foreground/40">+</span>}
           {m.imageUrl && <img src={m.imageUrl} alt="" className="h-6 w-6" loading="lazy" />}
@@ -424,12 +441,34 @@ function ComboMembers({ members }: { members: ComboMember[] }) {
   );
 }
 
-function ComboRowView({ row, rank, compare }: { row: ComboRow; rank: number; compare: boolean }) {
+function ComboRowView({
+  row,
+  rank,
+  compare,
+  popA,
+  popB,
+}: {
+  row: ComboRow;
+  rank: number;
+  compare: boolean;
+  popA: number | null;
+  popB: number | null;
+}) {
+  const allStock = row.gids.length > 0 && row.gids.every((g) => STOCK_GIDS.has(g));
+  // two-proportion z-test on the raw per-bucket player counts vs each bucket's
+  // population — flags deltas that are pure sampling noise (ns).
+  const test: ProportionTest | undefined =
+    compare && popA != null && popB != null
+      ? twoProportionZTest(row.countA, popA, row.countB ?? 0, popB)
+      : undefined;
   return (
-    <TableRow className="h-9">
+    <TableRow className={`h-9 ${allStock ? "bg-amber-500/[0.06] hover:bg-amber-500/[0.12]" : ""}`}>
       <TableCell className="py-1 text-right font-mono text-muted-foreground">{rank}</TableCell>
       <TableCell className="overflow-hidden py-1">
-        <ComboMembers members={row.members} />
+        <div className="flex items-center gap-2">
+          <ComboMembers members={row.members} />
+          {allStock && <StockBadge />}
+        </div>
       </TableCell>
       {compare ? (
         <>
@@ -440,7 +479,7 @@ function ComboRowView({ row, rank, compare }: { row: ComboRow; rank: number; com
             <UsagePct usage={row.usageB ?? 0} count={row.countB ?? 0} />
           </TableCell>
           <TableCell className="py-1 text-right">
-            <DeltaCell delta={row.delta ?? 0} />
+            <DeltaCell delta={row.delta ?? 0} test={test} popA={popA} popB={popB} />
           </TableCell>
         </>
       ) : (
@@ -472,16 +511,56 @@ function UsagePct({ usage, count }: { usage: number; count?: number }) {
   );
 }
 
-function DeltaCell({ delta }: { delta: number }) {
+/** small tinted badge warning that an all-stock combo's stats are unreliable */
+function StockBadge() {
+  return (
+    <span
+      title="All-stock combo. High-hour bot/idle accounts that never equip anything inflate the high-experience stock population, so this combo's share — and especially its compare-mode delta — is unreliable."
+      className="inline-flex shrink-0 items-center rounded border border-amber-500/30 bg-amber-500/10 px-1 py-0.5 font-mono text-[10px] leading-none text-amber-600 dark:text-amber-400"
+    >
+      ⚠ stock
+    </span>
+  );
+}
+
+/** A-vs-B delta in percentage points. In compare mode a two-proportion z-test
+ * decides whether the shift is real: non-significant deltas are greyed and
+ * tagged "ns" (up/down coloring is reserved for significant ones); the tooltip
+ * carries the p-value and both buckets' sample sizes. */
+function DeltaCell({
+  delta,
+  test,
+  popA,
+  popB,
+}: {
+  delta: number;
+  test?: ProportionTest | undefined;
+  popA?: number | null;
+  popB?: number | null;
+}) {
   const pp = delta * 100;
   const sign = pp > 0 ? "+" : "";
-  const color =
-    pp > 0.05 ? "text-chart-2" : pp < -0.05 ? "text-destructive" : "text-muted-foreground";
+  const significant = test ? test.significant : true;
+  const color = !significant
+    ? "text-muted-foreground/50"
+    : pp > 0.05
+      ? "text-chart-2"
+      : pp < -0.05
+        ? "text-destructive"
+        : "text-muted-foreground";
+  const title = test
+    ? `${formatPValue(test.pValue, test.significant)} · A n=${(popA ?? 0).toLocaleString()} · B n=${(popB ?? 0).toLocaleString()}`
+    : undefined;
   return (
-    <span className={`font-mono text-sm tabular-nums ${color}`}>
+    <span className={`font-mono text-sm tabular-nums ${color}`} title={title}>
       {sign}
       {pp.toFixed(1)}
       <span className="ml-0.5 text-[10px] text-muted-foreground/60">pp</span>
+      {test && !test.significant && (
+        <span className="ml-1 text-[10px] tracking-wide text-muted-foreground/60 uppercase">
+          ns
+        </span>
+      )}
     </span>
   );
 }

@@ -103,6 +103,7 @@ async function flushEnrichment(force = false): Promise<void> {
           personaname: p.personaname,
           avatarHash: p.avatarhash ?? null,
           visibility: p.communityvisibilitystate,
+          loccountrycode: p.loccountrycode ?? null,
         })
         .where(eq(schema.players.steamid, p.steamid));
     }

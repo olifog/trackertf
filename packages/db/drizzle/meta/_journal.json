@@ -64,6 +64,20 @@
       "when": 1787160765397,
       "tag": "0008_windy_viper",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787211752008,
+      "tag": "0009_marvelous_radioactive_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787213852418,
+      "tag": "0010_tiny_ben_grimm",
+      "breakpoints": true
     }
   ]
 }

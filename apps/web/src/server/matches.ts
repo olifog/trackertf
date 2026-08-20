@@ -1,8 +1,10 @@
 import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
 import { chQuery } from "@trackertf/clickhouse";
+import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { getCh } from "./ch.ts";
+import { getDb } from "./db.ts";
 
 /**
  * Observed casual matches, from ClickHouse `match_obs` (one row per player
@@ -239,4 +241,197 @@ export const matchLeaderboardQueryOptions = (filters: MatchLeaderFilters) =>
   queryOptions({
     queryKey: ["matchLeaderboard", filters],
     queryFn: () => fetchMatchLeaderboard({ data: filters }),
+  });
+
+/* -------------------------------------------------------------------------- */
+/* Probabilistic name → profile matching                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Sampled names are in-game display names, never linked steamids. We surface
+ * ranked PROFILE CANDIDATES, never a single asserted identity. Evidence, in
+ * order of weight:
+ *   - name        : exact normalized match, else pg_trgm similarity (the only
+ *                   hard key we have; TF2 names are highly non-unique).
+ *   - stat-delta  : did the candidate's tracked lifetime playtime increase
+ *                   across a stat-snapshot pair that brackets the segment start?
+ *                   If so they were provably playing TF2 during the window —
+ *                   the strongest corroborating signal we can compute.
+ *   - recent play : tf2_minutes_2wk > 0 (segments are recent, so an active
+ *                   player is a better fit than a dormant same-name account).
+ *   - uniqueness  : a sole exact-name profile is far likelier than one of many.
+ * Map/region are deliberately NOT scored: casual is SDR/region-hidden and we
+ * hold no per-profile map history, so neither can disambiguate.
+ */
+export type MatchTier = "strong" | "possible" | "weak";
+
+export interface ProfileCandidate {
+  steamid: string;
+  personaname: string | null;
+  avatarHash: string | null;
+  loccountrycode: string | null;
+  tf2Minutes2wk: number | null;
+  /** trigram name similarity, 0..1 (1 = exact normalized match) */
+  similarity: number;
+  /** combined confidence, 0..1 — ranked evidence, never a certainty */
+  confidence: number;
+  tier: MatchTier;
+  signals: {
+    exactName: boolean;
+    recentlyActive: boolean;
+    /** playtime provably accrued across a snapshot pair spanning the segment */
+    deltaCorroborated: boolean;
+  };
+}
+
+export interface ParticipantMatch {
+  observedName: string;
+  segment: { segmentId: string; map: string; region: number; startedAt: number };
+  /** observed score gain over the sampling window (context, not a match key) */
+  observedScoreGain: number | null;
+  candidates: ProfileCandidate[];
+}
+
+/** lowercase, trim, collapse internal whitespace, strip zero-width/control junk */
+function normalizeName(raw: string): string {
+  // strip zero-width spaces/joiners, BOM and bidi controls, then fold case
+  return raw
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
+
+export const resolveParticipant = createServerFn({ method: "GET" })
+  .validator(
+    z.object({
+      segmentId: z.string().regex(/^\d+$/),
+      name: z.string().min(1).max(64),
+    }),
+  )
+  .handler(async ({ data }): Promise<ParticipantMatch> => {
+    // Segment + observed-score context from ClickHouse (same source as the page).
+    const ctxRows = await chQuery<Record<string, unknown>>(
+      getCh(),
+      `select any(map) as map, any(region) as region,
+        toUnixTimestamp(any(started_at)) as started_at,
+        any(first_score) as first_score, any(last_score) as last_score
+      from match_obs
+      where segment_id = {segmentId:UInt64} and name = {name:String}`,
+      { segmentId: data.segmentId, name: data.name },
+    );
+    const ctx = ctxRows[0];
+    const startedAt = num(ctx?.["started_at"]);
+    const firstScore = ctx == null ? null : num(ctx["first_score"]);
+    const lastScore = ctx == null ? null : num(ctx["last_score"]);
+    const observedScoreGain =
+      firstScore == null || lastScore == null ? null : Math.max(0, lastScore - firstScore);
+
+    const norm = normalizeName(data.name);
+    const empty: ParticipantMatch = {
+      observedName: data.name,
+      segment: {
+        segmentId: data.segmentId,
+        map: String(ctx?.["map"] ?? ""),
+        region: num(ctx?.["region"]),
+        startedAt,
+      },
+      observedScoreGain,
+      candidates: [],
+    };
+    if (norm.length === 0) return empty;
+
+    const db = getDb();
+
+    // Candidate profiles by name. The GIN pg_trgm index on lower(personaname)
+    // serves the `%` fuzzy predicate; exact normalized matches always pass it.
+    const candRows = (await db.execute(sql`
+      select steamid, personaname, avatar_hash, loccountrycode, tf2_minutes_2wk,
+        similarity(lower(personaname), ${norm}) as sim,
+        (regexp_replace(lower(btrim(personaname)), '\\s+', ' ', 'g') = ${norm}) as exact
+      from players
+      where personaname is not null
+        and lower(personaname) % ${norm}
+      order by exact desc, sim desc
+      limit 50
+    `)) as unknown as Record<string, unknown>[];
+
+    if (candRows.length === 0) return empty;
+
+    const steamids = candRows.map((r) => String(r["steamid"]));
+    const exactCount = candRows.filter((r) => r["exact"] === true).length;
+
+    // Stat-delta corroboration: for each candidate, did a snapshot pair that
+    // brackets the segment START show lifetime playtime (tf2_minutes) increase?
+    // That proves they were playing TF2 through the window the name was seen.
+    const corroborated = new Set<string>();
+    if (startedAt > 0) {
+      const startIso = new Date(startedAt * 1000).toISOString();
+      const deltaRows = (await db.execute(sql`
+        with snaps as (
+          select steamid, fetched_at, tf2_minutes,
+            lead(tf2_minutes) over w as next_min,
+            lead(fetched_at) over w as next_at
+          from player_stat_snapshots
+          where steamid in (
+            select value from jsonb_array_elements_text(${JSON.stringify(steamids)}::jsonb)
+          )
+          window w as (partition by steamid order by fetched_at)
+        )
+        select distinct steamid
+        from snaps
+        where fetched_at <= ${startIso}::timestamptz
+          and next_at >= ${startIso}::timestamptz
+          and tf2_minutes is not null and next_min is not null
+          and next_min > tf2_minutes
+      `)) as unknown as Record<string, unknown>[];
+      for (const r of deltaRows) corroborated.add(String(r["steamid"]));
+    }
+
+    const candidates: ProfileCandidate[] = candRows.map((r) => {
+      const steamid = String(r["steamid"]);
+      const similarity = clamp01(num(r["sim"]));
+      const exactName = r["exact"] === true;
+      const tf2Minutes2wk = r["tf2_minutes_2wk"] == null ? null : num(r["tf2_minutes_2wk"]);
+      const recentlyActive = (tf2Minutes2wk ?? 0) > 0;
+      const deltaCorroborated = corroborated.has(steamid);
+
+      const confidence = clamp01(
+        0.45 * similarity +
+          (exactName ? 0.15 : 0) +
+          (recentlyActive ? 0.15 : 0) +
+          (deltaCorroborated ? 0.35 : 0) +
+          (exactName && exactCount === 1 ? 0.15 : 0) +
+          (candRows.length > 20 ? -0.1 : 0),
+      );
+      const tier: MatchTier =
+        deltaCorroborated && confidence >= 0.7
+          ? "strong"
+          : confidence >= 0.45
+            ? "possible"
+            : "weak";
+
+      return {
+        steamid,
+        personaname: (r["personaname"] as string | null) ?? null,
+        avatarHash: (r["avatar_hash"] as string | null) ?? null,
+        loccountrycode: (r["loccountrycode"] as string | null) ?? null,
+        tf2Minutes2wk,
+        similarity,
+        confidence,
+        tier,
+        signals: { exactName, recentlyActive, deltaCorroborated },
+      };
+    });
+
+    candidates.sort((a, b) => b.confidence - a.confidence || b.similarity - a.similarity);
+    return { ...empty, candidates };
+  });
+
+export const resolveParticipantQueryOptions = (segmentId: string, name: string) =>
+  queryOptions({
+    queryKey: ["resolveParticipant", segmentId, name],
+    queryFn: () => resolveParticipant({ data: { segmentId, name } }),
   });

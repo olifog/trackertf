@@ -89,6 +89,12 @@ export const performanceFiltersSchema = z.object({
   metric: z.enum(METRIC_KEYS).catch("points_hr").default("points_hr"),
   /** -1 = overall (all classes), 1-9 = Web API class number */
   class: z.number().int().min(-1).max(9).catch(-1).default(-1),
+  /**
+   * -1 = all weapon slots; 0=Primary 1=Secondary 2=Melee 4=Sapper 6=Watch.
+   * (3/5 are PDA/builder — already excluded — so aren't offered.) Applies only
+   * to subject:items; combos span slots and ignore it.
+   */
+  slot: z.number().int().min(-1).max(6).catch(-1).default(-1),
   /** min lifetime minutes played, snapped to HOURS_BUCKETS */
   minutes: z.number().int().nonnegative().catch(0).default(0).transform(snapTo(HOURS_BUCKETS)),
   /**
@@ -136,6 +142,35 @@ const PAGE_SIZE = 50;
 const MIN_PLAYTIME_SECONDS = 36_000;
 const MIN_PLAYERS = 5;
 
+/**
+ * PDA/builder pseudo-items (~every player of a class "equips" them). Excluded
+ * from both item and combo performance — the same set the usage page hides by
+ * default — identified by schema name, not slot.
+ */
+const PDA_NAMES = [
+  "TF_WEAPON_PDA_ENGINEER_BUILD",
+  "TF_WEAPON_PDA_ENGINEER_DESTROY",
+  "TF_WEAPON_PDA_SPY",
+  "TF_WEAPON_BUILDER",
+  "TF_WEAPON_BUILDER_SPY",
+] as const;
+
+let pdaGidsCache: Promise<number[]> | undefined;
+/** Group ids (reskin_group ?? defindex, i.e. the cgid the CH tables store) of
+ * every PDA/builder item, so they can be filtered out before aggregation.
+ * Cached for the process; empty result is safe (`x NOT IN []` is always true). */
+function fetchPdaGids(): Promise<number[]> {
+  pdaGidsCache ??= getDb()
+    .select({
+      defindex: schema.itemSchema.defindex,
+      reskinGroup: schema.itemSchema.reskinGroup,
+    })
+    .from(schema.itemSchema)
+    .where(inArray(schema.itemSchema.name, [...PDA_NAMES]))
+    .then((rows) => [...new Set(rows.map((r) => r.reskinGroup ?? r.defindex))]);
+  return pdaGidsCache;
+}
+
 interface RawItemRow {
   /** grouping key: cgid when reskins merge, real defindex when split */
   id: number;
@@ -165,7 +200,11 @@ function classClause(cls: number, col: string): string {
   return cls === -1 ? "" : `and ${col} = {class:UInt8}`;
 }
 
-function baseParams(filters: PerformanceFilters, offset: number): Record<string, unknown> {
+function baseParams(
+  filters: PerformanceFilters,
+  offset: number,
+  pdaGids: number[],
+): Record<string, unknown> {
   return {
     minPlaytime: MIN_PLAYTIME_SECONDS,
     minMinutes: filters.minutes,
@@ -173,7 +212,9 @@ function baseParams(filters: PerformanceFilters, offset: number): Record<string,
     cap: METRICS[filters.metric].cap,
     limit: PAGE_SIZE + 1,
     offset,
+    pdas: pdaGids,
     ...(filters.class === -1 ? {} : { class: filters.class }),
+    ...(filters.slot === -1 ? {} : { slot: filters.slot }),
   };
 }
 
@@ -188,7 +229,11 @@ function baseParams(filters: PerformanceFilters, offset: number): Record<string,
  * folds the pan family into per-class stock melees in the syncer — or the real
  * `defindex` when the user splits reskins out.
  */
-async function queryItems(filters: PerformanceFilters, offset: number): Promise<ComboAgg[]> {
+async function queryItems(
+  filters: PerformanceFilters,
+  offset: number,
+  pdaGids: number[],
+): Promise<ComboAgg[]> {
   const metric = METRICS[filters.metric].expr;
   const groupCol = filters.reskins ? "e.cgid" : "e.defindex";
   const rows = await chQuery<RawItemRow>(
@@ -200,7 +245,8 @@ async function queryItems(filters: PerformanceFilters, offset: number): Promise<
        avg(p.playtime_seconds) / 3600 as avg_hours
      from equipped e
      inner join player_class p on p.steamid = e.steamid and p.class_num = e.class_num
-     where e.slot <= 6
+     where ${filters.slot === -1 ? "e.slot <= 6" : "e.slot = {slot:Int8}"}
+       and ${groupCol} not in {pdas:Array(UInt32)}
        and p.playtime_seconds >= {minPlaytime:UInt32}
        and p.lifetime_min >= {minMinutes:UInt32}
        and (${metric}) <= {cap:Float64}
@@ -209,7 +255,7 @@ async function queryItems(filters: PerformanceFilters, offset: number): Promise<
      having players >= {minPlayers:UInt32}
      order by value desc, id asc
      limit {limit:UInt32} offset {offset:UInt32}`,
-    baseParams(filters, offset),
+    baseParams(filters, offset, pdaGids),
   );
   return rows.map((r) => ({
     members: [r.id],
@@ -235,12 +281,16 @@ async function queryCombos(
   filters: PerformanceFilters,
   offset: number,
   size: 2 | 3,
+  pdaGids: number[],
 ): Promise<ComboAgg[]> {
   const metric = METRICS[filters.metric].expr;
   const thirdJoin = size === 3 ? "array join l.weapon_gids as c" : "";
   const members = size === 3 ? "[a, b, c]" : "[a, b]";
   const groupCols = size === 3 ? "a, b, c" : "a, b";
-  const guard = size === 3 ? "a < b and b < c" : "a < b";
+  // strict-ascending guard + drop combos formed out of a PDA/builder slot
+  const letters = size === 3 ? ["a", "b", "c"] : ["a", "b"];
+  const pdaFilter = letters.map((l) => `${l} not in {pdas:Array(UInt32)}`).join(" and ");
+  const guard = `${size === 3 ? "a < b and b < c" : "a < b"} and ${pdaFilter}`;
   const orderCols = size === 3 ? "value desc, a asc, b asc, c asc" : "value desc, a asc, b asc";
   const rows = await chQuery<ComboAgg>(
     getCh(),
@@ -263,7 +313,7 @@ async function queryCombos(
      having players >= {minPlayers:UInt32}
      order by ${orderCols}
      limit {limit:UInt32} offset {offset:UInt32}`,
-    baseParams(filters, offset),
+    baseParams(filters, offset, pdaGids),
   );
   return rows;
 }
@@ -290,11 +340,12 @@ export const fetchPerformance = createServerFn({ method: "GET" })
   .validator(performancePageSchema)
   .handler(async ({ data }): Promise<PerfPage> => {
     const { offset, ...filters } = data;
+    const pdaGids = await fetchPdaGids();
     // over-fetch one row to learn whether another page exists
     const raw =
       filters.subject === "items"
-        ? await queryItems(filters, offset)
-        : await queryCombos(filters, offset, filters.subject === "combo3" ? 3 : 2);
+        ? await queryItems(filters, offset, pdaGids)
+        : await queryCombos(filters, offset, filters.subject === "combo3" ? 3 : 2, pdaGids);
     const page = raw.slice(0, PAGE_SIZE);
 
     const ids = [...new Set(page.flatMap((r) => r.members))];

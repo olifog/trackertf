@@ -143,8 +143,10 @@ function makeBoards(): BoardDef[] {
 export const BOARDS: readonly BoardDef[] = makeBoards();
 export const BOARD_MAP: ReadonlyMap<string, BoardDef> = new Map(BOARDS.map((b) => [b.key, b]));
 
-/** shared population filter: public persona, no VAC ban */
-const POP = "p.personaname is not null and p.vac_banned = false";
+/** shared population filter: public persona, no VAC ban, not a scored bot/outlier
+ * (botness >= 0.5, see docs/botness-signals.md; NULL = unscored = included) */
+const POP =
+  "p.personaname is not null and p.vac_banned = false and coalesce(p.botness, 0) < 0.5";
 
 /**
  * Full SELECT (steamid, value) for one board, ordered best-first with a

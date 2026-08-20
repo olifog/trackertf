@@ -6,6 +6,8 @@ export const playerSummarySchema = z.object({
   communityvisibilitystate: z.number(),
   avatarhash: z.string().optional(),
   profileurl: z.string().optional(),
+  /** ISO 3166-1 alpha-2, only present on public profiles that set a country */
+  loccountrycode: z.string().optional(),
 });
 export type PlayerSummary = z.infer<typeof playerSummarySchema>;
 
