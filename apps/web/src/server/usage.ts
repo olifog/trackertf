@@ -2,7 +2,7 @@ import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
 import { chQuery } from "@trackertf/clickhouse";
 import { createDbFromEnv, type Db, schema } from "@trackertf/db";
-import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getCh } from "./ch.ts";
 
@@ -23,12 +23,27 @@ export const usageFiltersSchema = z.object({
   slot: z.number().int().min(-1).max(8).catch(-1).default(-1),
   /** min minutes played in the last 2 weeks, snapped to ACTIVE_BUCKETS */
   active: z.number().int().nonnegative().catch(0).default(0).transform(snapTo(ACTIVE_BUCKETS)),
-  /** min lifetime minutes played, snapped to HOURS_BUCKETS */
+  /** min lifetime minutes played, snapped to HOURS_BUCKETS. In experience-compare
+   * mode (`xp`) this is the LOW-experience population (group A). */
   minutes: z.number().int().nonnegative().catch(0).default(0).transform(snapTo(HOURS_BUCKETS)),
+  /** min lifetime minutes for the HIGH-experience population (group B, `xp` mode
+   * only), snapped to HOURS_BUCKETS */
+  minutesB: z
+    .number()
+    .int()
+    .nonnegative()
+    .catch(240_000)
+    .default(240_000)
+    .transform(snapTo(HOURS_BUCKETS)),
   /** merge functionally-identical reskins/stranges (launch default: on) */
   merge: z.boolean().catch(true).default(true),
   /** show PDA/builder pseudo-items (~100% rows hidden by default) */
   pdas: z.boolean().catch(false).default(false),
+  /** experience-compare view: low-vs-high lifetime-playtime adoption delta
+   * (ClickHouse-backed). Distinct from the page's time-over-time delta overlay. */
+  xp: z.boolean().catch(false).default(false),
+  /** row sort in `xp` mode: high-group usage, or biggest low-vs-high delta */
+  sort: z.enum(["usage", "delta"]).catch("usage").default("usage"),
 });
 export type UsageFilters = z.infer<typeof usageFiltersSchema>;
 
@@ -38,7 +53,9 @@ const usagePageSchema = usageFiltersSchema.extend({
 
 export interface UsageRow {
   defindex: number;
+  /** single-population usage rate; in `xp` mode this is the LOW group (A) rate */
   usage: number;
+  /** equipping players; in `xp` mode this is the LOW group (A) count */
   count: number;
   sampleSize: number;
   computedAt: string;
@@ -48,11 +65,24 @@ export interface UsageRow {
   reskinGroup: number | null;
   slotName: string | null;
   usedByClasses: number[] | null;
+  /** HIGH group (B) usage rate — `xp` mode only, else null */
+  usageB: number | null;
+  /** HIGH group (B) equipping players — `xp` mode only, else null */
+  countB: number | null;
+  /** usageB - usage (percentage-point delta, +ve = adopted more by veterans) */
+  delta: number | null;
 }
 
-const toIso = (r: Omit<UsageRow, "computedAt"> & { computedAt: Date }): UsageRow => ({
+type UsageDbRow = Omit<UsageRow, "computedAt" | "usageB" | "countB" | "delta"> & {
+  computedAt: Date;
+};
+
+const toIso = (r: UsageDbRow): UsageRow => ({
   ...r,
   computedAt: r.computedAt.toISOString(),
+  usageB: null,
+  countB: null,
+  delta: null,
 });
 
 let db: Db | undefined;
@@ -71,6 +101,12 @@ export interface UsagePage {
   nextOffset: number | null;
   sampleSize: number | null;
   computedAt: string | null;
+  /** experience-compare (low-vs-high) view is active */
+  xp: boolean;
+  /** LOW-experience population size (`xp` mode only) */
+  popA: number | null;
+  /** HIGH-experience population size (`xp` mode only) */
+  popB: number | null;
 }
 
 function selectUsage(database: Db, filters: UsageFilters, merged: boolean, onlyGrouped = false) {
@@ -103,9 +139,128 @@ function selectUsage(database: Db, filters: UsageFilters, merged: boolean, onlyG
     .orderBy(desc(schema.usageStats.usage), desc(schema.usageStats.defindex));
 }
 
+/** counts come back as UInt64 → JSON strings; cgid (UInt32) arrives as a number */
+interface RawXpRow {
+  cgid: number;
+  cntA: string;
+  cntB: string;
+}
+interface RawCount {
+  n: string;
+}
+
+/**
+ * Per-item low-vs-high experience delta over ClickHouse `equipped`, grouped by
+ * the class-aware `cgid` (reskins/pan-family already merged). `sort` is a
+ * validated enum — never user free-text — so composing the ORDER BY fragment
+ * from it is safe; every population & value binds as a CH param.
+ */
+function xpDeltaQuery(sort: string): string {
+  const orderBy =
+    sort === "delta"
+      ? `abs(cntB / greatest({popB:Float64}, 1) - cntA / greatest({popA:Float64}, 1)) DESC, cntB DESC, cgid`
+      : `cntB DESC, cgid`;
+  return `
+    SELECT cgid,
+           uniqExactIf(steamid, lifetime_min >= {minA:UInt32}) AS cntA,
+           uniqExactIf(steamid, lifetime_min >= {minB:UInt32}) AS cntB
+    FROM equipped
+    WHERE class_num = {cls:UInt8} AND slot = {slot:Int8}
+    GROUP BY cgid
+    HAVING (cntA + cntB) >= 2
+    ORDER BY ${orderBy}
+    LIMIT {lim:UInt32} OFFSET {off:UInt32}`;
+}
+
+/** distinct players in a class at a lifetime-minute threshold (delta denominator) */
+async function fetchXpPop(cls: number, minMinutes: number): Promise<number> {
+  const [row] = await chQuery<RawCount>(
+    getCh(),
+    `SELECT count() AS n FROM loadout WHERE class_num = {cls:UInt8} AND lifetime_min >= {min:UInt32}`,
+    { cls, min: minMinutes },
+  );
+  return row ? Number(row.n) : 0;
+}
+
+async function fetchUsageXp(data: z.infer<typeof usagePageSchema>): Promise<UsagePage> {
+  const { offset, minutes: minA, minutesB: minB, sort } = data;
+  // the delta view needs a concrete class + slot; the UI enforces this, but
+  // clamp defensively for hand-edited URLs (any → Scout / primary)
+  const cls = data.class === -1 ? 1 : data.class;
+  const slot = data.slot === -1 ? 0 : data.slot;
+
+  const [popA, popB] = await Promise.all([fetchXpPop(cls, minA), fetchXpPop(cls, minB)]);
+
+  const raw = await chQuery<RawXpRow>(getCh(), xpDeltaQuery(sort), {
+    cls,
+    slot,
+    minA,
+    minB,
+    popA,
+    popB,
+    lim: PAGE_SIZE + 1,
+    off: offset,
+  });
+  const page = raw.slice(0, PAGE_SIZE);
+
+  // resolve class-aware group ids → names/images from Postgres item_schema
+  const cgids = [...new Set(page.map((r) => r.cgid))];
+  const items =
+    cgids.length > 0
+      ? await getDb()
+          .select({
+            defindex: schema.itemSchema.defindex,
+            name: schema.itemSchema.name,
+            itemName: schema.itemSchema.itemName,
+            imageUrl: schema.itemSchema.imageUrl,
+            slotName: schema.itemSchema.slot,
+          })
+          .from(schema.itemSchema)
+          .where(inArray(schema.itemSchema.defindex, cgids))
+      : [];
+  const byDefindex = new Map(items.map((i) => [i.defindex, i]));
+
+  const rows: UsageRow[] = page.map((r) => {
+    const countA = Number(r.cntA);
+    const countB = Number(r.cntB);
+    const usageA = popA > 0 ? countA / popA : 0;
+    const usageB = popB > 0 ? countB / popB : 0;
+    const it = byDefindex.get(r.cgid);
+    return {
+      defindex: r.cgid,
+      usage: usageA,
+      count: countA,
+      sampleSize: popA,
+      computedAt: new Date(0).toISOString(),
+      name: it?.name ?? null,
+      itemName: it?.itemName ?? null,
+      imageUrl: it?.imageUrl ?? null,
+      reskinGroup: null,
+      slotName: it?.slotName ?? null,
+      usedByClasses: null,
+      usageB,
+      countB,
+      delta: usageB - usageA,
+    };
+  });
+
+  return {
+    rows,
+    variants: [],
+    nextOffset: raw.length > PAGE_SIZE ? offset + PAGE_SIZE : null,
+    sampleSize: popA,
+    computedAt: null,
+    xp: true,
+    popA,
+    popB,
+  };
+}
+
 export const fetchUsage = createServerFn({ method: "GET" })
   .validator(usagePageSchema)
   .handler(async ({ data }): Promise<UsagePage> => {
+    if (data.xp) return fetchUsageXp(data);
+
     const { offset, ...filters } = data;
     // over-fetch by one row to learn whether another page exists
     const page = (
@@ -127,6 +282,9 @@ export const fetchUsage = createServerFn({ method: "GET" })
       nextOffset: page.length > PAGE_SIZE ? offset + PAGE_SIZE : null,
       sampleSize: rows[0]?.sampleSize ?? null,
       computedAt: rows[0]?.computedAt ?? null,
+      xp: false,
+      popA: null,
+      popB: null,
     };
   });
 

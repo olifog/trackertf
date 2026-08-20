@@ -37,8 +37,11 @@ const DEFAULT_FILTERS = {
   slot: -1,
   active: 0,
   minutes: 0,
+  minutesB: 240_000,
   merge: true,
   pdas: false,
+  xp: false,
+  sort: "usage",
 } as const;
 
 const CLASSES = [
@@ -73,6 +76,12 @@ const HOURS_STOPS = [
   { value: 120_000, label: "2000h+" },
   { value: 240_000, label: "4000h+" },
 ] as const;
+
+const HOURS_LABEL = new Map<number, string>(HOURS_STOPS.map((s) => [s.value, s.label]));
+
+/** experience-compare needs a concrete class + slot; used when toggling it on from "Any" */
+const COMPARE_DEFAULT_CLASS = 1;
+const COMPARE_DEFAULT_SLOT = 0;
 
 /** minutes-in-last-2-weeks slider stops */
 const ACTIVE_STOPS = [
@@ -296,6 +305,12 @@ function UsagePage() {
   const [compare, setCompare] = useState(false);
   const [comparePeriod, setComparePeriod] = useState<DeltaPeriod>(7);
 
+  // The experience-compare view (URL filter) owns the table; the local display
+  // overlays (strange/renamed, time-compare) are mutually exclusive with it.
+  const xp = search.xp;
+  const showStrange = strange && !xp;
+  const showCompare = compare && !xp;
+
   // Deltas are only tracked for the default headline view.
   const isHeadline =
     search.class === -1 &&
@@ -304,7 +319,7 @@ function UsagePage() {
     search.minutes === 0 &&
     search.merge;
 
-  const strangeQuery = useQuery({ ...strangeSharesQueryOptions(), enabled: strange });
+  const strangeQuery = useQuery({ ...strangeSharesQueryOptions(), enabled: showStrange });
   const strangeByGid = useMemo(() => {
     const m = new Map<number, StrangeShare>();
     for (const s of strangeQuery.data ?? []) m.set(s.gid, s);
@@ -313,7 +328,7 @@ function UsagePage() {
 
   const deltaQuery = useQuery({
     ...usageDeltasQueryOptions(comparePeriod),
-    enabled: compare && isHeadline,
+    enabled: showCompare && isHeadline,
   });
   const deltaByDef = useMemo(() => {
     const m = new Map<number, UsageDelta>();
@@ -345,6 +360,8 @@ function UsagePage() {
   );
   const sample = pages?.[0]?.sampleSize;
   const computedAt = pages?.[0]?.computedAt;
+  const popA = pages?.[0]?.popA ?? null;
+  const popB = pages?.[0]?.popB ?? null;
 
   // infinite scroll: sentinel below the table pulls the next page into view
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -375,20 +392,28 @@ function UsagePage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h1 className="font-heading text-2xl font-bold">Weapon usage</h1>
-        {sample !== null && sample !== undefined && (
+        {xp ? (
+          popA !== null && (
+            <p className="font-mono text-xs text-muted-foreground">
+              low: {popA.toLocaleString()} · high: {(popB ?? 0).toLocaleString()} players
+            </p>
+          )
+        ) : sample !== null && sample !== undefined ? (
           <p className="font-mono text-xs text-muted-foreground">
             n = {sample.toLocaleString()} players
             {computedAt && <span suppressHydrationWarning> · updated {formatAgo(computedAt)}</span>}
           </p>
-        )}
+        ) : null}
       </div>
 
       <div className="space-y-3 rounded-lg border bg-card/50 p-4">
         <FilterRow label="Class">
           <Segmented>
-            <Segment active={search.class === -1} patch={{ class: -1 }}>
-              Any
-            </Segment>
+            {!xp && (
+              <Segment active={search.class === -1} patch={{ class: -1 }}>
+                Any
+              </Segment>
+            )}
             {CLASSES.map((c) => (
               <Segment
                 key={c.num}
@@ -408,9 +433,11 @@ function UsagePage() {
 
         <FilterRow label="Slot">
           <Segmented>
-            <Segment active={search.slot === -1} patch={{ slot: -1 }}>
-              Any
-            </Segment>
+            {!xp && (
+              <Segment active={search.slot === -1} patch={{ slot: -1 }}>
+                Any
+              </Segment>
+            )}
             {SLOTS.map((s) => (
               <Segment key={s.num} active={search.slot === s.num} patch={{ slot: s.num }}>
                 {s.label}
@@ -419,23 +446,38 @@ function UsagePage() {
           </Segmented>
         </FilterRow>
 
-        <FilterRow label="Hours">
+        <FilterRow label={xp ? "Exp. low" : "Hours"}>
           <StopSlider
             stops={HOURS_STOPS}
             value={search.minutes}
             patch={(next) => ({ minutes: next })}
           />
-          <span className="text-[11px] text-muted-foreground">lifetime TF2 playtime</span>
+          <span className="text-[11px] text-muted-foreground">
+            {xp ? "less-experienced players" : "lifetime TF2 playtime"}
+          </span>
         </FilterRow>
 
-        <FilterRow label="Active">
-          <StopSlider
-            stops={ACTIVE_STOPS}
-            value={search.active}
-            patch={(next) => ({ active: next })}
-          />
-          <span className="text-[11px] text-muted-foreground">played in the last 2 weeks</span>
-        </FilterRow>
+        {xp && (
+          <FilterRow label="Exp. high">
+            <StopSlider
+              stops={HOURS_STOPS}
+              value={search.minutesB}
+              patch={(next) => ({ minutesB: next })}
+            />
+            <span className="text-[11px] text-muted-foreground">experienced players</span>
+          </FilterRow>
+        )}
+
+        {!xp && (
+          <FilterRow label="Active">
+            <StopSlider
+              stops={ACTIVE_STOPS}
+              value={search.active}
+              patch={(next) => ({ active: next })}
+            />
+            <span className="text-[11px] text-muted-foreground">played in the last 2 weeks</span>
+          </FilterRow>
+        )}
 
         <FilterRow label="Search">
           <input
@@ -447,19 +489,34 @@ function UsagePage() {
         </FilterRow>
 
         <FilterRow label="Options">
-          <SwitchFilter
-            label="Merge reskins & stranges"
-            checked={search.merge}
-            patch={(next) => ({ merge: next })}
-          />
+          {!xp && (
+            <SwitchFilter
+              label="Merge reskins & stranges"
+              checked={search.merge}
+              patch={(next) => ({ merge: next })}
+            />
+          )}
           <SwitchFilter
             label="Hide PDAs"
             checked={!search.pdas}
             patch={(next) => ({ pdas: !next })}
           />
-          <LocalSwitch label="Strange / renamed" checked={strange} onChange={setStrange} />
-          <LocalSwitch label="Compare usage" checked={compare} onChange={setCompare} />
-          {compare && (
+          <SwitchFilter
+            label="Compare experience"
+            checked={xp}
+            patch={(next) => ({
+              xp: next,
+              sort: next ? "delta" : "usage",
+              // the delta view needs a concrete class + slot; promote "Any"
+              ...(next && search.class === -1 ? { class: COMPARE_DEFAULT_CLASS } : {}),
+              ...(next && search.slot === -1 ? { slot: COMPARE_DEFAULT_SLOT } : {}),
+            })}
+          />
+          {!xp && (
+            <LocalSwitch label="Strange / renamed" checked={strange} onChange={setStrange} />
+          )}
+          {!xp && <LocalSwitch label="Compare usage" checked={compare} onChange={setCompare} />}
+          {!xp && compare && (
             <div className="inline-flex divide-x divide-border overflow-hidden rounded-md border">
               {DELTA_PERIODS.map((p) => (
                 <button
@@ -477,10 +534,29 @@ function UsagePage() {
               ))}
             </div>
           )}
+          {xp && (
+            <Segmented>
+              <Segment active={search.sort === "delta"} patch={{ sort: "delta" }}>
+                Biggest delta
+              </Segment>
+              <Segment active={search.sort === "usage"} patch={{ sort: "usage" }}>
+                Usage high
+              </Segment>
+            </Segmented>
+          )}
         </FilterRow>
       </div>
 
-      {strange && (
+      {xp && (
+        <p className="text-xs text-muted-foreground">
+          Adoption among <span className="text-foreground">less-experienced</span> vs{" "}
+          <span className="text-foreground">experienced</span> players for this class + slot: the
+          share of each group who equip the item, and the percentage-point delta between them.
+          Positive deltas are items veterans favour. Grouped by reskin family over the equip corpus,
+          independent of recent activity.
+        </p>
+      )}
+      {showStrange && (
         <p className="text-xs text-muted-foreground">
           Share of each weapon group's equips that are <span style={{ color: STRANGE_COLOR }}>Strange</span> or{" "}
           <span style={{ color: RENAMED_COLOR }}>renamed</span> (Name Tag), over the whole corpus —
@@ -488,20 +564,20 @@ function UsagePage() {
           going-forward only, so it reads low until older loadouts are recrawled.
         </p>
       )}
-      {compare && !isHeadline && (
+      {showCompare && !isHeadline && (
         <p className="text-xs text-muted-foreground">
           Deltas are tracked for the default view only — reset Class, Slot, Hours and Active to
           "Any"/"All" (merged) to compare.
         </p>
       )}
-      {compare && isHeadline && deltaQuery.data && !deltaQuery.data.enoughHistory && (
+      {showCompare && isHeadline && deltaQuery.data && !deltaQuery.data.enoughHistory && (
         <p className="text-xs text-muted-foreground">
           Deltas accrue daily
           {deltaQuery.data.comparisonDay && <> — first snapshot {deltaQuery.data.comparisonDay}</>}.
           Check back in a few days.
         </p>
       )}
-      {compare && isHeadline && deltaQuery.data?.enoughHistory && (
+      {showCompare && isHeadline && deltaQuery.data?.enoughHistory && (
         <p className="text-xs text-muted-foreground">
           Usage change vs {deltaQuery.data.comparisonDay} ({deltaQuery.data.days}d), in percentage
           points.
@@ -520,23 +596,41 @@ function UsagePage() {
                 <TableHead className="w-10 text-right">#</TableHead>
                 <TableHead className="w-9" />
                 <TableHead className="min-w-[9rem]">Item</TableHead>
-                {search.class === -1 && (
+                {!xp && search.class === -1 && (
                   <TableHead className="hidden w-27 sm:table-cell">Classes</TableHead>
                 )}
-                {search.slot === -1 && (
+                {!xp && search.slot === -1 && (
                   <TableHead className="hidden w-22 sm:table-cell">Slot</TableHead>
                 )}
-                <TableHead className="w-18 text-right">Players</TableHead>
-                <TableHead className="w-38 text-right">Usage</TableHead>
-                {strange && (
-                  <TableHead className="w-36 text-right">
-                    Strange<span className="text-muted-foreground/50"> / renamed</span>
-                  </TableHead>
+                {xp ? (
+                  <>
+                    <TableHead className="w-40 text-right">
+                      Low<span className="text-muted-foreground/50"> · {HOURS_LABEL.get(search.minutes)}</span>
+                    </TableHead>
+                    <TableHead className="w-40 text-right">
+                      High<span className="text-muted-foreground/50"> · {HOURS_LABEL.get(search.minutesB)}</span>
+                    </TableHead>
+                    <TableHead className="w-24 text-right">Delta</TableHead>
+                  </>
+                ) : (
+                  <>
+                    <TableHead className="w-18 text-right">Players</TableHead>
+                    <TableHead className="w-38 text-right">Usage</TableHead>
+                    {showStrange && (
+                      <TableHead className="w-36 text-right">
+                        Strange<span className="text-muted-foreground/50"> / renamed</span>
+                      </TableHead>
+                    )}
+                  </>
                 )}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.map((item, index) => {
+              {xp
+                ? items.map((item, index) => (
+                    <DeltaRow key={item.defindex} item={item} rank={index + 1} />
+                  ))
+                : items.map((item, index) => {
                 let variants =
                   search.merge && item.reskinGroup !== null
                     ? (variantsByGroup.get(item.reskinGroup) ?? [])
@@ -561,11 +655,15 @@ function UsagePage() {
                     onToggle={() => toggleExpand(item.defindex)}
                     showClasses={search.class === -1}
                     showSlot={search.slot === -1}
-                    showStrange={strange}
+                    showStrange={showStrange}
                     strange={
-                      strange ? strangeByGid.get(item.reskinGroup ?? item.defindex) : undefined
+                      showStrange
+                        ? strangeByGid.get(item.reskinGroup ?? item.defindex)
+                        : undefined
                     }
-                    delta={compare && isHeadline ? deltaByDef.get(item.defindex) : undefined}
+                    delta={
+                      showCompare && isHeadline ? deltaByDef.get(item.defindex) : undefined
+                    }
                   />
                 );
               })}
@@ -836,6 +934,67 @@ function DeltaBadge({ d }: { d: UsageDelta }) {
       {arrow}
       {Math.abs(pp).toFixed(2)}
     </span>
+  );
+}
+
+/** One population's adoption bar in the experience-compare table (low or high). */
+function CompareBar({ usage, count }: { usage: number; count: number }) {
+  return (
+    <div
+      className="flex items-center justify-end gap-2"
+      title={`${count.toLocaleString()} players`}
+    >
+      <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-secondary">
+        <div
+          className="h-full rounded-full bg-primary"
+          style={{ width: `${Math.min(usage * 100, 100)}%` }}
+        />
+      </div>
+      <span className="w-12 shrink-0 text-right font-mono text-sm tabular-nums">
+        {(usage * 100).toFixed(1)}%
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Low-vs-high adoption gap in percentage points. Positive (veterans favour it)
+ * is chart-2, negative is destructive, near-zero is muted so noise reads flat.
+ */
+function DeltaCell({ delta }: { delta: number }) {
+  const pp = delta * 100;
+  const color =
+    Math.abs(pp) < 0.05 ? "text-muted-foreground" : pp > 0 ? "text-chart-2" : "text-destructive";
+  return (
+    <span className={`font-mono text-sm tabular-nums ${color}`}>
+      {pp > 0 ? "+" : ""}
+      {pp.toFixed(1)}
+      <span className="ml-0.5 text-[10px] text-muted-foreground/60">pp</span>
+    </span>
+  );
+}
+
+/** One item row in the experience-compare view: low usage, high usage, delta. */
+function DeltaRow({ item, rank }: { item: UsageRow; rank: number }) {
+  return (
+    <TableRow className="h-9">
+      <TableCell className="py-1 text-right font-mono text-muted-foreground">{rank}</TableCell>
+      <TableCell className="py-0.5">
+        {item.imageUrl && <img src={item.imageUrl} alt="" className="h-7 w-7" loading="lazy" />}
+      </TableCell>
+      <TableCell className="overflow-hidden py-1 text-ellipsis">
+        <ItemName item={item} />
+      </TableCell>
+      <TableCell className="py-1">
+        <CompareBar usage={item.usage} count={item.count} />
+      </TableCell>
+      <TableCell className="py-1">
+        <CompareBar usage={item.usageB ?? 0} count={item.countB ?? 0} />
+      </TableCell>
+      <TableCell className="py-1 text-right">
+        <DeltaCell delta={item.delta ?? 0} />
+      </TableCell>
+    </TableRow>
   );
 }
 
