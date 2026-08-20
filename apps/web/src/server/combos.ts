@@ -20,15 +20,17 @@ export const comboFiltersSchema = z.object({
   class: z.number().int().min(-1).max(9).catch(1).default(1),
   /** combo size: 2 or 3 weapons; 4 only meaningful for Engineer (server clamps otherwise) */
   size: z.number().int().min(2).max(4).catch(2).default(2),
-  /** min lifetime minutes for population A, snapped to HOURS_BUCKETS */
-  minutes: z.number().int().nonnegative().catch(0).default(0).transform(snapTo(HOURS_BUCKETS)),
-  /** min lifetime minutes for population B (compare mode), snapped to HOURS_BUCKETS */
+  /** min lifetime minutes for population A, snapped to HOURS_BUCKETS. Defaults to
+   * 100h+ — below that the population is dominated by throwaway/idle accounts. */
+  minutes: z.number().int().nonnegative().catch(6_000).default(6_000).transform(snapTo(HOURS_BUCKETS)),
+  /** min lifetime minutes for population B (compare mode), snapped to HOURS_BUCKETS.
+   * Defaults to 2000h+: the 4000h+ bucket skews heavily toward idle/bot accounts. */
   minutesB: z
     .number()
     .int()
     .nonnegative()
-    .catch(240_000)
-    .default(240_000)
+    .catch(120_000)
+    .default(120_000)
     .transform(snapTo(HOURS_BUCKETS)),
   /** reveal the second experience population and per-combo A-vs-B delta */
   compare: z.boolean().catch(false).default(false),

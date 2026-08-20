@@ -146,9 +146,27 @@ So "all-stock melee" is normal for a <50 h newbie (20%) but a strong tell for a
 is a soft signal — it catches disengaged/farm accounts the stat flags miss, but
 must never be a hard flag (some real players genuinely melee-stock).
 
-**Score:** `stock_frac` = (played classes ≥10 h on stock melee) / (played
-classes ≥10 h), only counted when `total_hours >= 300` (else 0, to exempt new
-players). Contributes with a modest weight.
+**Score (shipped, broadened):** rather than melee alone, the live signal uses the
+fraction of **all weapon slots** (primary/secondary/melee, raw slot 0/1/2) left
+on the stock item across played classes (`>=10 h`) — a whole-loadout "equipped
+nothing" tell, not just the melee. `stock_frac` = (stock weapon slots on played
+classes) / (weapon slots on played classes), counted only when `total_hours >= 300`
+AND `played_classes >= 2` (else 0, to exempt new players and single-class mains).
+Stock weapon defindexes are hardcoded (mirror of parse.ts STOCK_ITEMS:
+`0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,29,30`). Weight
+bumped to **0.6**, so a near-total stock loadout on an invested multi-class account
+now clears the 0.5 cutoff on its own — this was a deliberate aggressiveness bump.
+
+### 6. Idle-engagement — lifetime hours vs actual class playtime (shipped)
+
+The "playtime consistency" tell (was an open item): Steam's lifetime playtime
+(`players.tf2_minutes`) far exceeding the sum of tracked class playtime
+(`sum(player_class_stats.playtime_seconds)`) is the classic idle-server / afk-farm
+signature — the account accrues hours in menus / idle boxes that never turn into
+class stats. Gated at `tf2_minutes >= 120000` (2000 h lifetime) to avoid flagging
+new or private-stats accounts, then ramps on the engagement ratio
+`class_secs / (lifetime_min*60)`: **0.4 → 0, 0.1 → 1** (i.e. once under 40% of your
+lifetime is actual class play, suspicion climbs). Weight **0.6**.
 
 ## Combining into one float
 
@@ -163,14 +181,19 @@ botness(player):
   s_rate   = ramp(max_class_rate_percentile, from=p99, to=hardcap)   # signal 1
   s_time   = ramp(total_hours, 15000 -> 30000)                       # signal 3
   s_idle   = (max_class_hours>=100) ? ramp(min_points_per_hour, 5 -> 0) : 0   # signal 4
-  s_stock  = (total_hours>=300) ? stock_frac_on_played_classes : 0    # signal 5
+  s_stock  = (total_hours>=300 and played_classes>=2) ? stock_weapon_frac : 0 # signal 5
+  s_engage = (lifetime_hours>=2000) ? ramp(class_secs/lifetime_secs, 0.4 -> 0.1) : 0  # signal 6
 
   # weighted, saturating combine (noisy-OR keeps any strong signal decisive)
-  botness = 1 - (1 - w_rate*s_rate)(1 - w_time*s_time)(1 - w_idle*s_idle)(1 - w_stock*s_stock)
+  botness = 1 - (1 - w_rate*s_rate)(1 - w_time*s_time)(1 - w_idle*s_idle)
+              * (1 - w_stock*s_stock)(1 - w_engage*s_engage)
 ```
 
-Suggested weights: `w_rate 0.9, w_time 0.8, w_idle 0.9, w_stock 0.4`. Rate/idle
-dominate; loadout is a nudge, never decisive on its own.
+Live weights: `w_rate 0.9, w_time 0.8, w_idle 0.9, w_stock 0.6, w_engage 0.6`.
+Rate/idle still dominate, but loadout and engagement are now strong enough that a
+near-total stock loadout, or a low-effort loadout paired with any idle/engagement
+signal, clears the cutoff — the deliberate aggressiveness bump the site needed
+once combos/performance/strange (all ClickHouse-backed) started honouring botness.
 
 **Cutoff:** exclude from usage aggregates and leaderboards when
 `botness >= 0.5`. Hard-flagged (1.0) always excluded. The 0.5 cutoff is tunable;
@@ -204,11 +227,15 @@ The analyser (Postgres-only, delete+insert every 15 min, already reads
    `personaname is not null and vac_banned = false`): add `and coalesce(
    botness,0) < 0.5`. This also fixes playtime/strange boards being topped by
    idle bots.
-5. **Strange leaderboards (ClickHouse path)**: CH has no botness column. Either
-   (a) push the excluded steamid set (only ~500 ids — trivially small) into the
-   CH query as `steamid NOT IN (...)`, or (b) have the syncer carry a `botness`
-   column onto the CH `player_class`/`equipped` tables during its 15-min rebuild.
-   (a) is simplest given the tiny flagged set.
+5. **ClickHouse-backed reads (combos, performance, strange) — SHIPPED via the
+   syncer.** Rather than carry a botness column into CH, the syncer's source
+   queries now simply **exclude** flagged players at the PG→CH boundary:
+   `ENRICHED_EQUIPPED` and `syncPlayerClass` both gained
+   `and coalesce(p.botness, 0) < 0.5` on their `players` join. So `loadout`,
+   `equipped`, and `player_class` in CH contain only non-bot rows, and every
+   CH-backed page (combos shares + z-test populations, performance rate stats,
+   strange shares) is bot-clean without any query changes. This closed the gap
+   where usage (PG `usage_stats`) was bot-excluded but combos/performance were not.
 
 ### Validation before rollout
 

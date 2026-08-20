@@ -24,8 +24,8 @@ import {
 const DEFAULT_FILTERS = {
   class: 1,
   size: 2,
-  minutes: 0,
-  minutesB: 240_000,
+  minutes: 6_000,
+  minutesB: 120_000,
   compare: false,
   sort: "usage",
 } as const;
@@ -356,6 +356,15 @@ function CombosPage() {
           )}
         </FilterRow>
       </div>
+
+      {(search.minutes === 240_000 || search.minutesB === 240_000) && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200/90">
+          The 4000h+ bucket skews heavily toward idle and bot accounts, which
+          barely change loadouts — its shares aren't representative of how the
+          weapon is actually played. Prefer 100h+ → 2000h+ for meaningful
+          comparisons.
+        </div>
+      )}
 
       {visibleRows.length === 0 && !query.isFetching ? (
         <p className="text-muted-foreground">

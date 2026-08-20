@@ -34,6 +34,7 @@ const ENRICHED_EQUIPPED = sql`
          coalesce(p.tf2_minutes_2wk, 0) as active_2wk_min
   from equipped_items e
   join players p on p.steamid = e.steamid and p.items_status = 'ok'
+    and coalesce(p.botness, 0) < 0.5
   left join item_schema s on s.defindex = e.defindex`;
 
 async function swap(name: string, fill: (staging: string) => Promise<void>): Promise<void> {
@@ -113,6 +114,7 @@ async function syncPlayerClass(): Promise<void> {
            coalesce(p.tf2_minutes_2wk, 0) as active_2wk_min
     from player_class_stats c
     join players p on p.steamid = c.steamid and p.stats_status = 'ok'
+      and coalesce(p.botness, 0) < 0.5
   `)) as unknown as Record<string, unknown>[];
   await swap("player_class", (staging) => insertRows(ch, staging, rows));
 }

@@ -34,17 +34,21 @@ const POPULATIONS = HOURS_BUCKETS.flatMap((minutes) =>
  *
  * Signals: (1) impossible per-class rates, (2) hack-marker saturation values,
  * (3) impossible playtime ceilings, (4) idle shape (points-based, so real
- * medics aren't flagged), (5) all-stock melee on engaged classes (gated on real
- * per-class playtime, since equipped stock is backfilled for every class/slot).
- * Hard flags (1/2/3 at their impossible caps) force 1.0; the rest are graded
- * sub-scores combined via a weighted noisy-OR (w: rate .9, time .8, idle .9,
- * stock .4). Cutoff for exclusion is botness >= 0.5.
+ * medics aren't flagged), (5) all-stock weapon loadout across engaged classes
+ * (fraction of weapon slots left on the default item, gated on real per-class
+ * playtime), (6) idle-engagement: high lifetime hours but little actual class
+ * playtime (the classic idle-server / afk-farm tell). Hard flags (1/2/3 at their
+ * impossible caps) force 1.0; the rest are graded sub-scores combined via a
+ * weighted noisy-OR (w: rate .9, time .8, idle .9, stock .6, engage .6). Cutoff
+ * for exclusion is botness >= 0.5 — a near-total stock loadout, or a low-effort
+ * loadout paired with any idle signal, now clears it.
  */
 async function recomputeBotness(): Promise<void> {
   await db.execute(sql`
     with class_agg as (
       select
         c.steamid,
+        max(coalesce(pp.tf2_minutes, 0)) as lifetime_min,
         sum(c.playtime_seconds) as total_secs,
         max(c.playtime_seconds) as max_class_secs,
         -- hack-marker saturation: INT32 max (2^31-1) or the ~1e9 offset
@@ -70,21 +74,22 @@ async function recomputeBotness(): Promise<void> {
         min(case when c.playtime_seconds >= 360000
               then c.points_scored::float8 * 3600 / c.playtime_seconds end) as min_pph_100h
       from player_class_stats c
+      join players pp on pp.steamid = c.steamid
       group by c.steamid
     ),
-    -- zero-effort loadout tell: real stock melee (raw defindex, not gid — a
-    -- reskin is still a choice) on classes the player has actually played (>=10h)
-    stock_melee(class_num, def) as (
-      values (1, 0), (2, 3), (3, 6), (4, 1), (5, 8), (6, 5), (7, 2), (8, 4), (9, 7)
-    ),
+    -- zero-effort loadout tell: fraction of WEAPON slots (primary/secondary/melee,
+    -- slot 0/1/2) left on the stock item across classes the player has actually
+    -- played (>=10h). Raw defindex, not gid — a reskin is still a deliberate
+    -- choice. Stock weapon defindexes mirror parse.ts STOCK_ITEMS.
     stock_agg as (
       select e.steamid,
-        count(*) filter (where pcs.playtime_seconds >= 36000)::int as played_classes,
-        count(*) filter (where pcs.playtime_seconds >= 36000 and e.defindex = sm.def)::int as stock_classes
+        count(distinct e.class_num) filter (where pcs.playtime_seconds >= 36000)::int as played_classes,
+        count(*) filter (where pcs.playtime_seconds >= 36000)::int as weapon_slots,
+        count(*) filter (where pcs.playtime_seconds >= 36000 and e.defindex in
+          (0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,29,30))::int as stock_slots
       from equipped_items e
-      join stock_melee sm on sm.class_num = e.class_num
       join player_class_stats pcs on pcs.steamid = e.steamid and pcs.class_num = e.class_num
-      where e.slot = 2
+      where e.slot in (0, 1, 2)
       group by e.steamid
     )
     update players p set botness = sub.botness
@@ -99,8 +104,18 @@ async function recomputeBotness(): Promise<void> {
             * (1 - 0.8 * least(greatest((ca.total_secs / 3600.0 - 15000) / 15000, 0), 1))
             * (1 - 0.9 * case when ca.min_pph_100h is not null
                  then least(greatest((5 - ca.min_pph_100h) / 3.0, 0), 1) else 0 end)
-            * (1 - 0.4 * case when ca.total_secs >= 300 * 3600 and coalesce(sa.played_classes, 0) > 0
-                 then sa.stock_classes::float8 / sa.played_classes else 0 end)
+            -- (5) near-total stock loadout across 2+ engaged classes with real
+            -- investment (>=300h). Fraction of weapon slots on default items.
+            * (1 - 0.6 * case when ca.total_secs >= 300 * 3600
+                 and coalesce(sa.played_classes, 0) >= 2 and coalesce(sa.weapon_slots, 0) > 0
+                 then sa.stock_slots::float8 / sa.weapon_slots else 0 end)
+            -- (6) idle-engagement: at 2000h+ lifetime, ramp on how little of that
+            -- time shows up as actual class playtime (ratio 0.4 -> 0, 0.1 -> 1)
+            * (1 - 0.6 * case when ca.lifetime_min >= 120000 and ca.total_secs > 0
+                 and ca.lifetime_min * 60 > ca.total_secs
+                 then least(greatest(
+                   (0.4 - ca.total_secs::float8 / (ca.lifetime_min * 60)) / 0.3, 0), 1)
+                 else 0 end)
           )
         end as botness
       from class_agg ca
