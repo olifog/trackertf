@@ -54,9 +54,18 @@ const FRONTIER_SOURCE_LABELS: Record<string, string> = {
 };
 const frontierSourceLabel = (s: string) => FRONTIER_SOURCE_LABELS[s] ?? s;
 
+const BUDGET_CLASS_LABELS: Record<string, string> = {
+  crawler: "crawler",
+  scanner: "server scanner",
+  sampler: "match sampler",
+  web: "web lookups",
+  _shared: "shared burst pool",
+};
+const budgetClassLabel = (c: string) => BUDGET_CLASS_LABELS[c] ?? c;
+
 function DataPage() {
   const { data } = useSuspenseQuery(healthQueryOptions());
-  const { crawl, corpus, queue, countries, countryKnown, population } = data;
+  const { crawl, corpus, queue, countries, countryKnown, population, budget } = data;
   const maxCountry = countries[0]?.count ?? 0;
   // rough coverage: crawled profiles active in 2wk vs the recapture estimate of
   // players active on casual over 14d. Window/scope mismatch → a proxy, clamped.
@@ -201,10 +210,49 @@ function DataPage() {
           ))}
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Dequeued by priority then age — player-requested recrawls jump ahead of the scheduler's
-          own, new-player seeds ahead of both.
+          A weighted-fair lottery picks a source each draw, then the best row within it (priority
+          then age) — player-requested recrawls jump ahead of the scheduler's own, new-player seeds
+          ahead of both. Friend expansion is the only self-sustaining source.
         </p>
       </div>
+
+      {budget.length > 0 && (
+        <div>
+          <h2 className="mb-2 font-heading text-lg font-semibold">
+            Steam API budget{" "}
+            <span className="text-sm text-muted-foreground">(rate-limit buckets)</span>
+          </h2>
+          <div className="grid gap-x-6 gap-y-2 rounded-lg border bg-card/50 p-4 sm:grid-cols-2">
+            {budget.map((b) => {
+              const frac = b.capacity > 0 ? Math.min(1, b.tokens / b.capacity) : 0;
+              return (
+                <div key={b.cls} className="flex items-center gap-2 text-sm">
+                  <span className="w-32 shrink-0 truncate text-muted-foreground">
+                    {budgetClassLabel(b.cls)}
+                  </span>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary/50">
+                    <div
+                      className={`h-full rounded-full ${frac < 0.15 ? "bg-destructive/70" : "bg-primary/70"}`}
+                      style={{ width: `${frac * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-40 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                    {Math.round(b.tokens)}/{Math.round(b.capacity)}
+                    <span className="ml-1 text-muted-foreground/60">
+                      {b.refillPerSec.toFixed(1)}/s
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Token buckets throttle Steam API calls per subsystem. Tokens are available headroom now;
+            the /s figure is each bucket's sustained refill (guaranteed calls/sec floor). A bucket
+            near empty (red) is being worked at its ceiling.
+          </p>
+        </div>
+      )}
 
       <div className="rounded-lg border bg-card/50 p-4">
         <h2 className="font-heading text-lg font-semibold">Players by country</h2>

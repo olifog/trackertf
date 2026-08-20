@@ -21,6 +21,20 @@ export interface ClassSlice {
   players: number;
 }
 
+/** Live-ish snapshot of one Steam API rate-budget bucket (token bucket). */
+export interface BudgetSlice {
+  /** rate class: crawler | scanner | sampler | web | _shared */
+  cls: string;
+  /** tokens available right now, with lazy refill applied since updated_at */
+  tokens: number;
+  /** burst ceiling */
+  capacity: number;
+  /** steady refill rate, tokens/sec (≈ sustained calls/sec floor) */
+  refillPerSec: number;
+  /** lifetime admitted-call counter */
+  consumedTotal: number;
+}
+
 export interface HealthResponse {
   /** last 48h api outcome counters */
   api: EndpointHealth[];
@@ -61,6 +75,8 @@ export interface HealthResponse {
   };
   /** class-playtime distribution across the corpus */
   byClass: ClassSlice[];
+  /** Steam API rate-budget buckets (token-bucket broker), empty if unreadable */
+  budget: BudgetSlice[];
   lastAnalyserRun: string | null;
 }
 
@@ -212,6 +228,30 @@ export const fetchHealth = createServerFn({ method: "GET" }).handler(
       console.warn("recapture estimate failed:", err);
     }
 
+    // Steam API budget buckets. Fail-soft: web_ro may not have SELECT on
+    // steam_budget yet. tokens is recomputed with the same lazy-refill the
+    // broker applies (min(capacity, tokens + refill*age)), so it reflects
+    // headroom right now rather than the last-take snapshot.
+    let budget: BudgetSlice[] = [];
+    try {
+      const rows = (await db.execute(sql`
+        select class,
+          least(capacity, tokens + refill_per_sec * extract(epoch from (now() - updated_at)))::double precision eff,
+          capacity, refill_per_sec, consumed_total
+        from steam_budget
+        order by class
+      `)) as unknown as Record<string, unknown>[];
+      budget = rows.map((r) => ({
+        cls: String(r["class"]),
+        tokens: num(r["eff"]),
+        capacity: num(r["capacity"]),
+        refillPerSec: num(r["refill_per_sec"]),
+        consumedTotal: num(r["consumed_total"]),
+      }));
+    } catch (err) {
+      console.warn("budget read failed:", err);
+    }
+
     return {
       api,
       crawl: {
@@ -241,6 +281,7 @@ export const fetchHealth = createServerFn({ method: "GET" }).handler(
         estimatedCasual14d,
       },
       byClass,
+      budget,
       lastAnalyserRun: analyser?.t ? new Date(analyser.t).toISOString() : null,
     };
   },
