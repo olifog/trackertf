@@ -180,7 +180,7 @@ export const fetchHealth = createServerFn({ method: "GET" }).handler(
         from (
           select
             trimBoth(replaceRegexpAll(replaceRegexpAll(lowerUTF8(name),
-              '[\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{FEFF}]', ''),
+              '[\\\\x{200B}-\\\\x{200F}\\\\x{202A}-\\\\x{202E}\\\\x{2060}\\\\x{FEFF}]', ''),
               '\\s+', ' ')) as nm,
             countIf(started_at <= now() - toIntervalDay(7)) as w1,
             countIf(started_at > now() - toIntervalDay(7)) as w2

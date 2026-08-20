@@ -82,25 +82,25 @@ export const fetchPlayerSightings = createServerFn({ method: "GET" })
       `select toString(segment_id) as segment_id,
         any(map) as map,
         any(region) as region,
-        toUnixTimestamp(any(started_at)) as started_at,
+        toUnixTimestamp(min(started_at)) as started_unix,
         any(first_score) as first_score,
         any(last_score) as last_score
       from match_obs
       where trimBoth(
               replaceRegexpAll(
                 replaceRegexpAll(lowerUTF8(name),
-                  '[\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{FEFF}]', ''),
+                  '[\\\\x{200B}-\\\\x{200F}\\\\x{202A}-\\\\x{202E}\\\\x{2060}\\\\x{FEFF}]', ''),
                 '\\s+', ' ')) = {norm:String}
         and started_at > now() - toIntervalDay({days:UInt16})
       group by segment_id
-      order by started_at desc
+      order by started_unix desc
       limit {lim:UInt32}`,
       { norm, days: WINDOW_DAYS, lim: CANDIDATE_LIMIT },
     );
     if (candRows.length === 0) return { hasName: true, sightings: [], scanned: 0, ambiguous: 0 };
 
     const cands = candRows.map((r) => {
-      const startedAt = num(r["started_at"]);
+      const startedAt = num(r["started_unix"]);
       const first = num(r["first_score"]);
       const last = num(r["last_score"]);
       return {
