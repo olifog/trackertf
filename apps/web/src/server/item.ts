@@ -6,6 +6,7 @@ import { eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getCh } from "./ch.ts";
 import { getDb } from "./db.ts";
+import { HALE_OWN_KILLS } from "./leaderboards.ts";
 
 export interface ItemInfo {
   defindex: number;
@@ -257,4 +258,173 @@ export const itemPairsQueryOptions = (defindex: number, minutes: number) =>
   queryOptions({
     queryKey: ["itemPairs", defindex, minutes],
     queryFn: () => fetchItemPairs({ data: { defindex, minutes } }),
+  });
+
+// --- Strange kill distribution -------------------------------------------
+
+/**
+ * Strange-rank tiers (ascending by kill floor), mirroring the in-game
+ * kill-eater rank names. Values are kept identical to the canonical list in
+ * packages/tf2-schema/src/strange.ts — this is a deliberate web-local copy
+ * because apps/web does not depend on @trackertf/tf2-schema (the leaderboards
+ * and player pages inline the same constants). The top tier floor is
+ * HALE_OWN_KILLS, single-sourced from leaderboards.ts. Consolidate if web ever
+ * takes a tf2-schema dependency.
+ */
+const STRANGE_RANKS: { kills: number; name: string }[] = [
+  { kills: 0, name: "Strange" },
+  { kills: 10, name: "Unremarkable" },
+  { kills: 25, name: "Scarcely Lethal" },
+  { kills: 45, name: "Mildly Menacing" },
+  { kills: 70, name: "Somewhat Threatening" },
+  { kills: 100, name: "Uncharitable" },
+  { kills: 135, name: "Notably Dangerous" },
+  { kills: 175, name: "Sufficiently Lethal" },
+  { kills: 225, name: "Truly Feared" },
+  { kills: 275, name: "Spectacularly Lethal" },
+  { kills: 350, name: "Gore-Spattered" },
+  { kills: 500, name: "Wicked Nasty" },
+  { kills: 750, name: "Positively Inhumane" },
+  { kills: 999, name: "Totally Ordinary" },
+  { kills: 1000, name: "Face-Melting" },
+  { kills: 1500, name: "Rage-Inducing" },
+  { kills: 2500, name: "Server-Clearing" },
+  { kills: 5000, name: "Epic" },
+  { kills: 7500, name: "Legendary" },
+  { kills: 12500, name: "Australian" },
+  { kills: HALE_OWN_KILLS, name: "Hale's Own" },
+];
+
+/** Highest Strange rank name a kill count has reached. */
+function strangeRank(kills: number): string {
+  let name = STRANGE_RANKS[0]!.name;
+  for (const r of STRANGE_RANKS) {
+    if (kills >= r.kills) name = r.name;
+    else break;
+  }
+  return name;
+}
+
+export interface StrangeTier {
+  /** kill floor of this rank tier */
+  threshold: number;
+  name: string;
+  count: number;
+}
+
+export interface StrangeDist {
+  /** Strange (quality 11) copies of the group with a non-zero kill counter */
+  copies: number;
+  avgKills: number;
+  medianKills: number;
+  p90Kills: number;
+  maxKills: number;
+  /** copies that have reached Hale's Own (HALE_OWN_KILLS) */
+  haleOwnCount: number;
+  /** rank name of the single highest counter */
+  topRankName: string;
+  /** non-empty rank tiers, ascending by kill floor */
+  tiers: StrangeTier[];
+}
+
+/**
+ * Distribution of Strange kill-eater counters across every Strange (quality 11)
+ * copy of this item's functional group — the population view that complements
+ * the per-player Strange leaderboard. Reads the materialized
+ * `equipped_items.strange_kills` column directly (same source as
+ * fetchItemStrangeBoard), applies the site-wide botness filter so bot inventories
+ * don't skew the spread, and computes percentiles + the per-tier histogram in
+ * Postgres so only summary rows cross the wire. Empty (null) when the item has
+ * no Strange copies with kills recorded.
+ */
+export const fetchStrangeDist = createServerFn({ method: "GET" })
+  .validator(z.object({ defindex: z.number().int().nonnegative() }))
+  .handler(async ({ data }): Promise<StrangeDist | null> => {
+    const db = getDb();
+    const [item] = await db
+      .select({ defindex: schema.itemSchema.defindex, reskinGroup: schema.itemSchema.reskinGroup })
+      .from(schema.itemSchema)
+      .where(eq(schema.itemSchema.defindex, data.defindex))
+      .limit(1);
+    if (!item) return null;
+    const groupId = item.reskinGroup ?? item.defindex;
+    const members = await db
+      .select({ defindex: schema.itemSchema.defindex })
+      .from(schema.itemSchema)
+      .where(eq(schema.itemSchema.reskinGroup, groupId));
+    const groupIds = [...new Set([groupId, item.defindex, ...members.map((m) => m.defindex)])];
+    const idList = sql.join(
+      groupIds.map((id) => sql`${id}`),
+      sql`, `,
+    );
+
+    // Map each counter to its rank-tier floor via a descending CASE built from
+    // STRANGE_RANKS, so the histogram bucketing lives in SQL alongside the
+    // percentiles. One copy per (player, class) — a multi-class Strange folds to
+    // its highest counter first so it counts once.
+    const tierCase = sql.join(
+      STRANGE_RANKS.toReversed().map((r) => sql`when k >= ${r.kills} then ${r.kills}`),
+      sql` `,
+    );
+
+    const [summary] = (await db.execute(sql`
+      with copies as (
+        select max(e.strange_kills) as k
+        from equipped_items e
+        join players p using (steamid)
+        where e.defindex in (${idList}) and e.quality = 11 and e.strange_kills > 0
+          and coalesce(p.botness, 0) < 0.5
+        group by e.steamid, e.class_num
+      )
+      select
+        count(*)::int as copies,
+        coalesce(avg(k), 0)::float as avg_kills,
+        coalesce(percentile_cont(0.5) within group (order by k), 0)::float as median_kills,
+        coalesce(percentile_cont(0.9) within group (order by k), 0)::float as p90_kills,
+        coalesce(max(k), 0)::int as max_kills
+      from copies
+    `)) as unknown as [Record<string, unknown> | undefined];
+
+    const copies = Number(summary?.["copies"] ?? 0);
+    if (copies === 0) return null;
+
+    const tierRows = (await db.execute(sql`
+      with copies as (
+        select max(e.strange_kills) as k
+        from equipped_items e
+        join players p using (steamid)
+        where e.defindex in (${idList}) and e.quality = 11 and e.strange_kills > 0
+          and coalesce(p.botness, 0) < 0.5
+        group by e.steamid, e.class_num
+      )
+      select (case ${tierCase} else 0 end)::int as tier, count(*)::int as count
+      from copies
+      group by tier
+    `)) as unknown as Record<string, unknown>[];
+
+    const nameByFloor = new Map(STRANGE_RANKS.map((r) => [r.kills, r.name]));
+    const tiers: StrangeTier[] = tierRows
+      .map((r) => {
+        const threshold = Number(r["tier"]);
+        return { threshold, name: nameByFloor.get(threshold) ?? "Strange", count: Number(r["count"]) };
+      })
+      .toSorted((a, b) => a.threshold - b.threshold);
+
+    const maxKills = Number(summary?.["max_kills"] ?? 0);
+    return {
+      copies,
+      avgKills: Number(summary?.["avg_kills"] ?? 0),
+      medianKills: Number(summary?.["median_kills"] ?? 0),
+      p90Kills: Number(summary?.["p90_kills"] ?? 0),
+      maxKills,
+      haleOwnCount: tiers.find((t) => t.threshold >= HALE_OWN_KILLS)?.count ?? 0,
+      topRankName: strangeRank(maxKills),
+      tiers,
+    };
+  });
+
+export const strangeDistQueryOptions = (defindex: number) =>
+  queryOptions({
+    queryKey: ["strangeDist", defindex],
+    queryFn: () => fetchStrangeDist({ data: { defindex } }),
   });

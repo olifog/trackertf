@@ -11,7 +11,7 @@ import {
 } from "#/components/ui/table";
 import { qualityColor, qualityName, qualityRank } from "#/lib/quality";
 import { avatarUrl, CLASS_NAMES, itemDisplayName } from "#/lib/tf2";
-import { itemPairsQueryOptions, itemQueryOptions } from "#/server/item";
+import { itemPairsQueryOptions, itemQueryOptions, strangeDistQueryOptions } from "#/server/item";
 import { HALE_OWN_KILLS, itemStrangeBoardQueryOptions } from "#/server/leaderboards";
 
 export const Route = createFileRoute("/item/$defindex")({
@@ -185,6 +185,8 @@ function ItemPage() {
         </div>
       )}
 
+      <StrangeDistribution defindex={item.defindex} />
+
       <StrangeLeaderboard defindex={item.defindex} />
 
       {groupMembers.length > 1 && (
@@ -233,6 +235,69 @@ function ItemPage() {
       )}
 
       <PairedWeapons defindex={item.defindex} />
+    </div>
+  );
+}
+
+/**
+ * Population-level Strange kill-eater distribution for this item's group: how
+ * the kill counters spread across every Strange copy (avg / median / p90 / top
+ * rank), the share that have hit Hale's Own, and a per-rank-tier histogram.
+ * Complements the per-player leaderboard below. Hidden when no Strange copies
+ * carry kills. Bot inventories are excluded server-side.
+ */
+function StrangeStat({ label, value }: { label: string; value: string }) {
+  return (
+    <span>
+      <span className="text-muted-foreground">{label} </span>
+      {value}
+    </span>
+  );
+}
+
+function StrangeDistribution({ defindex }: { defindex: number }) {
+  const { data } = useQuery(strangeDistQueryOptions(defindex));
+  if (!data || data.copies === 0) return null;
+
+  const maxCount = Math.max(...data.tiers.map((t) => t.count), 1);
+
+  return (
+    <div>
+      <h2 className="mb-2 font-heading text-lg font-semibold">
+        Strange kill distribution{" "}
+        <span className="text-sm font-normal text-muted-foreground">
+          ({data.copies.toLocaleString()} Strange {data.copies === 1 ? "copy" : "copies"})
+        </span>
+      </h2>
+      <div className="mb-3 flex flex-wrap gap-x-8 gap-y-1 font-mono text-sm tabular-nums">
+        <StrangeStat label="avg" value={Math.round(data.avgKills).toLocaleString()} />
+        <StrangeStat label="median" value={Math.round(data.medianKills).toLocaleString()} />
+        <StrangeStat label="p90" value={Math.round(data.p90Kills).toLocaleString()} />
+        <StrangeStat label="top" value={`${data.maxKills.toLocaleString()} (${data.topRankName})`} />
+        <StrangeStat
+          label="Hale's Own"
+          value={`${data.haleOwnCount.toLocaleString()} (${((data.haleOwnCount / data.copies) * 100).toFixed(1)}%)`}
+        />
+      </div>
+      <div className="space-y-1">
+        {data.tiers.map((t) => (
+          <div key={t.threshold} className="flex items-center gap-2 text-xs">
+            <span className="w-40 shrink-0 truncate text-muted-foreground">
+              {t.name}
+              {t.threshold >= HALE_OWN_KILLS ? "" : "+"}
+            </span>
+            <div className="h-3 flex-1 rounded-sm bg-muted">
+              <div
+                className="h-3 rounded-sm bg-primary"
+                style={{ width: `${(t.count / maxCount) * 100}%` }}
+              />
+            </div>
+            <span className="w-10 text-right font-mono tabular-nums text-muted-foreground">
+              {t.count.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
