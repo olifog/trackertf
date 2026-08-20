@@ -55,6 +55,13 @@ export interface EquippedRow {
   slot: number;
   quality: number;
   strangeKills: number;
+  /** owner applied a Name Tag (custom_name present); stock backfill = false */
+  renamed: boolean;
+}
+
+/** A player-applied Name Tag shows up as a `custom_name` on the item. */
+function isRenamed(item: BackpackItem): boolean {
+  return item.custom_name !== undefined;
 }
 
 /**
@@ -79,6 +86,7 @@ export function parseEquipped(items: readonly BackpackItem[]): EquippedRow[] {
         slot: semanticSlot(equip.class, slot),
         quality: item.quality ?? QUALITY_UNIQUE,
         strangeKills: killEaterCount(item),
+        renamed: isRenamed(item),
       });
     }
   }
@@ -96,6 +104,7 @@ export function parseEquipped(items: readonly BackpackItem[]): EquippedRow[] {
           slot: semanticSlot(classNum, slot),
           quality: QUALITY_UNIQUE,
           strangeKills: 0,
+          renamed: false,
         });
       }
     }

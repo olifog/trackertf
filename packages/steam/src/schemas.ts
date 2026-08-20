@@ -51,6 +51,9 @@ export const backpackItemSchema = z.object({
   level: z.number().optional(),
   quality: z.number().optional(),
   quantity: z.number().optional(),
+  // present (any string, incl. empty) only when the owner applied a Name Tag —
+  // GetPlayerItems omits the field entirely for un-renamed items
+  custom_name: z.string().optional(),
   equipped: z.array(equipInfoSchema).optional(),
   attributes: z.array(itemAttributeSchema).optional(),
 });

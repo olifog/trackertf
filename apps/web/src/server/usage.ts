@@ -151,16 +151,22 @@ export interface StrangeShare {
   gid: number;
   /** 0..1 fraction of the group's equips that are Strange quality */
   strangeShare: number;
-  /** total equips in the group (Strange share denominator) */
+  /** 0..1 fraction that carry a player-applied Name Tag (renamed). Captured
+   * going-forward only, so this is a floor until the corpus turns over. */
+  renamedShare: number;
+  /** total equips in the group (share denominator) */
   sampleSize: number;
 }
 
 export const fetchStrangeShares = createServerFn({ method: "GET" }).handler(
   async (): Promise<StrangeShare[]> => {
+    // renamed_ct, NOT `renamed` — an alias matching the real column would get
+    // pushed into WHERE by ClickHouse and break the aggregate.
     const rows = await chQuery<Record<string, unknown>>(
       getCh(),
       `select gid,
         countIf(quality = 11) as strange,
+        countIf(renamed = 1) as renamed_ct,
         count() as total
       from equipped
       group by gid
@@ -171,6 +177,7 @@ export const fetchStrangeShares = createServerFn({ method: "GET" }).handler(
       return {
         gid: Number(r["gid"]),
         strangeShare: total > 0 ? Number(r["strange"]) / total : 0,
+        renamedShare: total > 0 ? Number(r["renamed_ct"]) / total : 0,
         sampleSize: total,
       };
     });

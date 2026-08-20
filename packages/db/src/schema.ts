@@ -127,6 +127,8 @@ export const equippedItems = pgTable(
     quality: smallint().notNull().default(6),
     /** Strange kill_eater (attr 214) count; 0 if not Strange / not captured */
     strangeKills: integer("strange_kills").notNull().default(0),
+    /** owner applied a Name Tag (custom_name present); false for pre-0013 rows */
+    renamed: boolean("renamed").notNull().default(false),
   },
   (t) => [
     primaryKey({ columns: [t.steamid, t.classNum, t.slot, t.defindex] }),

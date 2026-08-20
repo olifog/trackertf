@@ -28,6 +28,9 @@ import {
 
 /** Strange quality color (#CF6A32), resolved once for the strange-share bars. */
 const STRANGE_COLOR = qualityColor(11);
+/** Renamed isn't a quality — a distinct periwinkle keeps it legible next to
+ * Strange's orange without pretending it belongs to the quality palette. */
+const RENAMED_COLOR = "#6C8CD5";
 
 const DEFAULT_FILTERS = {
   class: -1,
@@ -454,7 +457,7 @@ function UsagePage() {
             checked={!search.pdas}
             patch={(next) => ({ pdas: !next })}
           />
-          <LocalSwitch label="Strange share" checked={strange} onChange={setStrange} />
+          <LocalSwitch label="Strange / renamed" checked={strange} onChange={setStrange} />
           <LocalSwitch label="Compare usage" checked={compare} onChange={setCompare} />
           {compare && (
             <div className="inline-flex divide-x divide-border overflow-hidden rounded-md border">
@@ -477,6 +480,14 @@ function UsagePage() {
         </FilterRow>
       </div>
 
+      {strange && (
+        <p className="text-xs text-muted-foreground">
+          Share of each weapon group's equips that are <span style={{ color: STRANGE_COLOR }}>Strange</span> or{" "}
+          <span style={{ color: RENAMED_COLOR }}>renamed</span> (Name Tag), over the whole corpus —
+          independent of the population sliders, and the two can overlap. Renamed is tracked
+          going-forward only, so it reads low until older loadouts are recrawled.
+        </p>
+      )}
       {compare && !isHeadline && (
         <p className="text-xs text-muted-foreground">
           Deltas are tracked for the default view only — reset Class, Slot, Hours and Active to
@@ -517,7 +528,11 @@ function UsagePage() {
                 )}
                 <TableHead className="w-18 text-right">Players</TableHead>
                 <TableHead className="w-38 text-right">Usage</TableHead>
-                {strange && <TableHead className="w-32 text-right">Strange</TableHead>}
+                {strange && (
+                  <TableHead className="w-36 text-right">
+                    Strange<span className="text-muted-foreground/50"> / renamed</span>
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -682,7 +697,10 @@ function ItemRows({
         {showStrange && (
           <TableCell className="py-1">
             {strange ? (
-              <StrangeBar share={strange.strangeShare} />
+              <QualitySplitBar
+                strangeShare={strange.strangeShare}
+                renamedShare={strange.renamedShare}
+              />
             ) : (
               <span className="block text-right font-mono text-xs text-muted-foreground/40">—</span>
             )}
@@ -742,19 +760,42 @@ function UsageBar({ usage, dim }: { usage: number; dim?: boolean }) {
   );
 }
 
-/** Strange-share bar — same shape as UsageBar but in the Strange quality color. */
-function StrangeBar({ share }: { share: number }) {
+/** One quality-share mini-bar (share of a weapon group's equips in a state). */
+function ShareBar({ share, color, label }: { share: number; color: string; label: string }) {
   return (
-    <div className="flex items-center justify-end gap-2">
-      <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-secondary">
+    <div className="flex items-center justify-end gap-1.5" title={`${label}: ${(share * 100).toFixed(1)}%`}>
+      <span className="w-3 text-right font-mono text-[9px] text-muted-foreground/60">{label}</span>
+      <div className="h-1.5 w-14 shrink-0 overflow-hidden rounded-full bg-secondary">
         <div
           className="h-full rounded-full"
-          style={{ width: `${Math.min(share * 100, 100)}%`, backgroundColor: STRANGE_COLOR }}
+          style={{ width: `${Math.min(share * 100, 100)}%`, backgroundColor: color }}
         />
       </div>
-      <span className="w-12 shrink-0 text-right font-mono text-xs tabular-nums">
+      <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums">
         {(share * 100).toFixed(1)}%
       </span>
+    </div>
+  );
+}
+
+/**
+ * Strange and renamed shares for a weapon group, stacked. They're INDEPENDENT
+ * overlapping fractions (an item can be both Strange and renamed), so they're
+ * shown as two bars rather than one partitioned bar — never summed. Renamed is
+ * captured going-forward only, so its share is a floor until the corpus turns
+ * over (see the note under the Options row).
+ */
+function QualitySplitBar({
+  strangeShare,
+  renamedShare,
+}: {
+  strangeShare: number;
+  renamedShare: number;
+}) {
+  return (
+    <div className="flex flex-col items-end gap-0.5">
+      <ShareBar share={strangeShare} color={STRANGE_COLOR} label="S" />
+      <ShareBar share={renamedShare} color={RENAMED_COLOR} label="R" />
     </div>
   );
 }

@@ -29,7 +29,7 @@ const ENRICHED_EQUIPPED = sql`
                    = (select coalesce(reskin_group, 264) from item_schema where defindex = 264)
            then ${PAN_REMAP}
            else coalesce(s.reskin_group, e.defindex) end as cgid,
-         e.quality, e.strange_kills,
+         e.quality, e.strange_kills, e.renamed,
          coalesce(p.tf2_minutes, 0) as lifetime_min,
          coalesce(p.tf2_minutes_2wk, 0) as active_2wk_min
   from equipped_items e
@@ -69,6 +69,8 @@ async function syncEquipped(): Promise<void> {
     cgid: r["cgid"],
     quality: r["quality"],
     strange_kills: r["strange_kills"],
+    // pg boolean → CH UInt8 (JSONEachRow accepts true/false for UInt8, but be explicit)
+    renamed: r["renamed"] ? 1 : 0,
     lifetime_min: r["lifetime_min"],
     active_2wk_min: r["active_2wk_min"],
   }));

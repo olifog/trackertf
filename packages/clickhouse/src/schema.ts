@@ -22,6 +22,7 @@ export const CH_SCHEMA: Record<string, string> = {
     cgid UInt32,
     quality UInt8,
     strange_kills UInt32,
+    renamed UInt8,
     lifetime_min UInt32,
     active_2wk_min UInt32
   ) ENGINE = MergeTree ORDER BY (class_num, slot, cgid, steamid)`,
