@@ -1,4 +1,4 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import {
@@ -9,6 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { regionLabel } from "#/lib/geo";
 import { qualityColor, qualityName } from "#/lib/quality";
 import {
   avatarUrl,
@@ -26,7 +27,9 @@ import {
   playerFriendsQueryOptions,
   playerInventoryQueryOptions,
   playerQueryOptions,
+  requestRecrawl,
 } from "#/server/player";
+import { type PlayerSightings, playerSightingsQueryOptions } from "#/server/sightings";
 
 export const Route = createFileRoute("/player/$steamid")({
   loader: ({ context, params }) =>
@@ -36,6 +39,7 @@ export const Route = createFileRoute("/player/$steamid")({
       context.queryClient.ensureQueryData(playerInventoryQueryOptions(params.steamid)),
       context.queryClient.ensureQueryData(playerFriendsQueryOptions(params.steamid)),
       context.queryClient.ensureQueryData(friendRanksQueryOptions(params.steamid)),
+      context.queryClient.ensureQueryData(playerSightingsQueryOptions(params.steamid)),
     ]),
   component: PlayerPage,
 });
@@ -89,6 +93,10 @@ function PlayerPage() {
   const { data: inventory } = useSuspenseQuery(playerInventoryQueryOptions(steamid));
   const { data: friends } = useSuspenseQuery(playerFriendsQueryOptions(steamid));
   const { data: friendRanks } = useSuspenseQuery(friendRanksQueryOptions(steamid));
+  const { data: sightings } = useSuspenseQuery(playerSightingsQueryOptions(steamid));
+  const recrawl = useMutation({
+    mutationFn: () => requestRecrawl({ data: { steamid } }),
+  });
   const bestRanks = ranks.slice(0, 20);
 
   if (!p.found) {
@@ -110,7 +118,7 @@ function PlayerPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-start gap-4">
         {avatarUrl(p.avatarHash) && (
           <img src={avatarUrl(p.avatarHash) as string} alt="" className="h-16 w-16 rounded-md" />
         )}
@@ -134,6 +142,11 @@ function PlayerPage() {
             {p.steamid} · backpack: {p.itemsStatus} · stats: {p.statsStatus}
           </p>
         </div>
+        <RecrawlButton
+          onClick={() => recrawl.mutate()}
+          pending={recrawl.isPending}
+          result={recrawl.data ?? null}
+        />
       </div>
 
       {sortedStats.length > 0 ? (
@@ -206,6 +219,10 @@ function PlayerPage() {
         </div>
       ) : (
         <p className="text-muted-foreground">Game stats are private for this player.</p>
+      )}
+
+      {(sightings.sightings.length > 0 || sightings.ambiguous > 0) && (
+        <SightingsSection sightings={sightings} />
       )}
 
       {bestRanks.length > 0 && (
@@ -380,6 +397,104 @@ function PlayerPage() {
             </p>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Header action: enqueue this player for a fresh crawl. The frontier role is
+ * INSERT-only with on-conflict-do-nothing, so this is safe to expose. */
+function RecrawlButton({
+  onClick,
+  pending,
+  result,
+}: {
+  onClick: () => void;
+  pending: boolean;
+  result: { queued: boolean; alreadyQueued: boolean } | null;
+}) {
+  const done = result?.queued ?? false;
+  const label = pending
+    ? "queueing…"
+    : result
+      ? result.queued
+        ? result.alreadyQueued
+          ? "already queued"
+          : "queued ✓"
+        : "failed — retry"
+      : "request recrawl";
+  return (
+    <div className="ml-auto flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={pending || done}
+        className="rounded-md border px-2.5 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-70"
+      >
+        {label}
+      </button>
+      {done && (
+        <span className="max-w-40 text-right text-[10px] leading-tight text-muted-foreground/70">
+          re-crawled within a few minutes
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Casual matches we've observed this player in — name match plus provable
+ * concurrent play, with no same-name ambiguity (see server/sightings.ts). */
+function SightingsSection({ sightings }: { sightings: PlayerSightings }) {
+  return (
+    <div>
+      <h2 className="mb-1 font-heading text-lg font-semibold">Recent sightings</h2>
+      <p className="mb-2 max-w-2xl text-xs text-muted-foreground">
+        Casual matches our sampler saw this player's name in over the last 30 days, confirmed by a
+        lifetime-playtime increase spanning the match — and unique to them (no other same-named
+        profile was also playing then). In-game names, not linked accounts, so this is a strong
+        inference, not a certainty.
+      </p>
+      {sightings.sightings.length > 0 ? (
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Map</TableHead>
+              <TableHead className="w-40">Region</TableHead>
+              <TableHead className="w-28 text-right">When</TableHead>
+              <TableHead className="w-28 text-right">Score gain</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sightings.sightings.map((s) => (
+              <TableRow key={s.segmentId} className="h-9">
+                <TableCell className="py-1 font-mono text-xs">{s.map || "—"}</TableCell>
+                <TableCell className="py-1 text-xs text-muted-foreground">
+                  {regionLabel(s.region)}
+                </TableCell>
+                <TableCell
+                  className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground"
+                  suppressHydrationWarning
+                >
+                  {formatAgo(new Date(s.startedAt * 1000).toISOString())}
+                </TableCell>
+                <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+                  {s.scoreGain === null ? "—" : `+${s.scoreGain.toLocaleString()}`}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          No unambiguous sightings in the last 30 days.
+        </p>
+      )}
+      {sightings.ambiguous > 0 && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {sightings.ambiguous.toLocaleString()} more corroborated match
+          {sightings.ambiguous === 1 ? "" : "es"} hidden — another player shares this name and was
+          also playing then, so we can't attribute them.
+        </p>
       )}
     </div>
   );

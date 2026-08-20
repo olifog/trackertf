@@ -138,6 +138,33 @@ export const fetchPlayer = createServerFn({ method: "GET" })
     };
   });
 
+/**
+ * User-initiated recrawl request. Inserts the player into the crawl frontier at
+ * a priority above the scheduler's own recrawls (1) but below new-player seeds
+ * (5), so a manual "refresh me" jumps the queue without starving discovery. The
+ * web DB role has INSERT-only on crawl_frontier with `on conflict do nothing`,
+ * so this is inherently abuse-safe: at most one pending row per steamid, and a
+ * repeat request while one is pending is a no-op (returns alreadyQueued). We
+ * only enqueue players we already know — unknown steamids seed via fetchPlayer.
+ */
+export const requestRecrawl = createServerFn({ method: "POST" })
+  .validator(z.object({ steamid: z.string().regex(/^\d{17}$/) }))
+  .handler(async ({ data }): Promise<{ queued: boolean; alreadyQueued: boolean }> => {
+    const db = getDb();
+    try {
+      const rows = (await db.execute(sql`
+        insert into crawl_frontier (steamid, source, priority)
+        values (${data.steamid}, 'recrawl', 3)
+        on conflict (steamid) do nothing
+        returning steamid
+      `)) as unknown as unknown[];
+      // a returned row means we inserted; none means a pending row already existed
+      return { queued: true, alreadyQueued: rows.length === 0 };
+    } catch {
+      return { queued: false, alreadyQueued: false };
+    }
+  });
+
 export interface InventoryRow {
   defindex: number;
   quality: number;

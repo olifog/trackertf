@@ -20,11 +20,7 @@ import {
   RATE_THRESHOLD_HOURS,
 } from "@trackertf/db/boards";
 import { avatarUrl, CLASS_NAMES } from "#/lib/tf2";
-import {
-  isStrangeBoard,
-  leaderboardQueryOptions,
-  STRANGE_BOARD_KEYS,
-} from "#/server/leaderboards";
+import { isStrangeBoard, leaderboardQueryOptions, STRANGE_BOARD_KEYS } from "#/server/leaderboards";
 
 /**
  * Strange-kill boards aren't part of the (metric, scope, kind) grid in
@@ -50,6 +46,16 @@ const STRANGE_BOARDS: BoardDef[] = [
     label: "Highest single Strange counter",
     shortLabel: "Top Strange item",
     valueLabel: "Kills on item",
+    decimals: 0,
+  },
+  {
+    key: STRANGE_BOARD_KEYS[2],
+    metric: "hours",
+    scope: "overall",
+    kind: "total",
+    label: "Most Hale's Own weapons (equipped Stranges past 25,000 kills)",
+    shortLabel: "Hale's Own",
+    valueLabel: "Hale's Own items",
     decimals: 0,
   },
 ];
@@ -186,8 +192,7 @@ function LeaderboardsPage() {
   const gridOptions = BOARDS.filter(
     (b) => b.scope === def.scope && (b.kind === "total" || b.minRateHours === currentHours),
   );
-  const boardOptions =
-    def.scope === "overall" ? [...gridOptions, ...STRANGE_BOARDS] : gridOptions;
+  const boardOptions = def.scope === "overall" ? [...gridOptions, ...STRANGE_BOARDS] : gridOptions;
 
   return (
     <div className="space-y-5">
@@ -244,10 +249,10 @@ function LeaderboardsPage() {
       <p className="text-xs text-muted-foreground">
         Among crawled players with public profiles, no VAC bans
         {participants !== null && <>, {participants.toLocaleString()} qualifying players</>}.
-        {strange && (
-          <> Counts come from players' currently equipped Strange (quality 11) items.</>
-        )}
-        {def.kind === "per_hour" && <> Rate boards require {currentHours}+ hours on the scope.</>}{" "}
+        {strange && <> Counts come from players' currently equipped Strange (quality 11) items.</>}
+        {def.kind === "per_hour" && (
+          <> Rate boards require {currentHours}+ hours on the scope.</>
+        )}{" "}
         Sample skews connected and veteran players.
       </p>
 

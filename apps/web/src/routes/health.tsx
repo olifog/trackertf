@@ -15,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { countryFlag, countryName } from "#/lib/geo";
 import { CLASS_NAMES, formatAgo } from "#/lib/tf2";
 import { healthQueryOptions } from "#/server/health";
 
@@ -46,9 +47,17 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 const pct = (part: number, total: number) =>
   total === 0 ? "-" : `${((part / total) * 100).toFixed(1)}%`;
 
+const FRONTIER_SOURCE_LABELS: Record<string, string> = {
+  seed: "new players",
+  recrawl: "recrawls",
+  friend_bfs: "friend expansion",
+};
+const frontierSourceLabel = (s: string) => FRONTIER_SOURCE_LABELS[s] ?? s;
+
 function DataPage() {
   const { data } = useSuspenseQuery(healthQueryOptions());
-  const { crawl, corpus } = data;
+  const { crawl, corpus, queue, countries, countryKnown } = data;
+  const maxCountry = countries[0]?.count ?? 0;
 
   const classBars = data.byClass
     .map((c) => ({
@@ -129,6 +138,64 @@ function DataPage() {
           <Stat label="public game stats" value={pct(crawl.statsOk, crawl.players)} />
           <Stat label="loadout sample" value={crawl.itemsOk.toLocaleString()} />
         </div>
+      </div>
+
+      <div>
+        <h2 className="mb-2 font-heading text-lg font-semibold">Crawl queue</h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Stat label="queued total" value={queue.total.toLocaleString()} />
+          <Stat
+            label="oldest waiting"
+            value={queue.oldestEnqueued ? formatAgo(queue.oldestEnqueued) : "—"}
+            sub={queue.oldestEnqueued ? "since enqueued" : "queue empty"}
+          />
+          {queue.bySource.map((s) => (
+            <Stat
+              key={s.source}
+              label={frontierSourceLabel(s.source)}
+              value={s.count.toLocaleString()}
+              sub={pct(s.count, queue.total)}
+            />
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Dequeued by priority then age — player-requested recrawls jump ahead of the scheduler's
+          own, new-player seeds ahead of both.
+        </p>
+      </div>
+
+      <div className="rounded-lg border bg-card/50 p-4">
+        <h2 className="font-heading text-lg font-semibold">Players by country</h2>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Where crawled players are from — {countryKnown.toLocaleString()} profiles expose a public
+          country (public, non-VAC, non-bot). Top {countries.length}.
+        </p>
+        {countries.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No country data yet.</p>
+        ) : (
+          <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+            {countries.map((c) => (
+              <div key={c.code} className="flex items-center gap-2 text-sm">
+                <span className="w-5 shrink-0 text-center">{countryFlag(c.code)}</span>
+                <span className="w-28 shrink-0 truncate text-muted-foreground">
+                  {countryName(c.code)}
+                </span>
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary/50">
+                  <div
+                    className="h-full rounded-full bg-primary/70"
+                    style={{ width: `${maxCountry > 0 ? (c.count / maxCountry) * 100 : 0}%` }}
+                  />
+                </div>
+                <span className="w-24 shrink-0 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                  {c.count.toLocaleString()}
+                  <span className="ml-1 text-muted-foreground/60">
+                    {pct(c.count, countryKnown)}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div>

@@ -37,11 +37,14 @@ export interface LeaderboardResponse {
  * Postgres precompute the other boards read. So these keys are handled by a
  * dedicated CH→PG path here and are deliberately absent from BOARD_MAP.
  */
-export const STRANGE_BOARD_KEYS = ["strange:total", "strange:max"] as const;
+export const STRANGE_BOARD_KEYS = ["strange:total", "strange:max", "strange:haleown"] as const;
+
+/** kills for a Strange item to reach the top "Hale's Own" rank (mirror of
+ * HALE_OWN_KILLS in tf2-schema strange.ts / the player-page inline copy) */
+const HALE_OWN_KILLS = 25000;
 export type StrangeBoardKey = (typeof STRANGE_BOARD_KEYS)[number];
 const STRANGE_KEY_SET: ReadonlySet<string> = new Set(STRANGE_BOARD_KEYS);
-export const isStrangeBoard = (key: string): key is StrangeBoardKey =>
-  STRANGE_KEY_SET.has(key);
+export const isStrangeBoard = (key: string): key is StrangeBoardKey => STRANGE_KEY_SET.has(key);
 
 const boardKeySchema = z
   .string()
@@ -55,9 +58,19 @@ const boardKeySchema = z
  * strange_kills live), then joined back to Postgres `players` for persona /
  * avatar and the POP filter (public persona, no VAC ban, botness < 0.5 — the
  * same bot/outlier exclusion boards.ts applies to the grid boards).
+ * `strange:haleown` ranks players by how many equipped Stranges have hit the
+ * top rank (>= 25,000 kills) — a "how many maxed weapons" board.
  */
 async function fetchStrangeBoard(board: StrangeBoardKey): Promise<LeaderboardResponse> {
-  const agg = board === "strange:max" ? "max(strange_kills)" : "sum(strange_kills)";
+  const agg =
+    board === "strange:max"
+      ? "max(strange_kills)"
+      : board === "strange:haleown"
+        ? `countIf(strange_kills >= ${HALE_OWN_KILLS})`
+        : "sum(strange_kills)";
+  // Hale's Own is a count of maxed items, so drop players with zero (they'd
+  // otherwise pad the tail); the other boards already require strange_kills > 0.
+  const having = board === "strange:haleown" ? "having value > 0" : "";
   // over-fetch from CH so POP-filtered dropouts in PG still leave a full top-100
   const chRows = await chQuery<{ steamid: string; value: string | number }>(
     getCh(),
@@ -65,6 +78,7 @@ async function fetchStrangeBoard(board: StrangeBoardKey): Promise<LeaderboardRes
      from equipped
      where quality = 11 and strange_kills > 0
      group by steamid
+     ${having}
      order by value desc
      limit 300`,
   );
