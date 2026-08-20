@@ -138,19 +138,48 @@ export const fetchPlayer = createServerFn({ method: "GET" })
     };
   });
 
+export interface RecrawlResult {
+  /** true if the player is in the frontier now (whether we just added it or it
+   * was already pending) — the success state for the button */
+  queued: boolean;
+  /** true if a pending row already existed (scheduler or a prior request) */
+  alreadyQueued: boolean;
+  /** 1-based position within the recrawl source's dequeue order, null if unknown */
+  position: number | null;
+  /** rough estimate of seconds until this row is crawled, null if not derivable */
+  etaSeconds: number | null;
+}
+
 /**
  * User-initiated recrawl request. Inserts the player into the crawl frontier at
  * a priority above the scheduler's own recrawls (1) but below new-player seeds
  * (5), so a manual "refresh me" jumps the queue without starving discovery. The
  * web DB role has INSERT-only on crawl_frontier with `on conflict do nothing`,
  * so this is inherently abuse-safe: at most one pending row per steamid, and a
- * repeat request while one is pending is a no-op (returns alreadyQueued). We
- * only enqueue players we already know — unknown steamids seed via fetchPlayer.
+ * repeat request while one is pending is a no-op. We only enqueue players we
+ * already know — unknown steamids seed via fetchPlayer.
+ *
+ * After (attempting) the insert we always read the frontier to report the row's
+ * queue position and a rough ETA — so an already-queued row is a *success* that
+ * shows how long the wait is, not a confusing "failed". The ETA models the
+ * dequeue: the crawler runs a weighted-fair lottery across sources that have
+ * pending work, so the recrawl source earns share `w_recrawl / Σ w_active` of
+ * total crawl throughput; position/that-rate is the estimate.
  */
 export const requestRecrawl = createServerFn({ method: "POST" })
   .validator(z.object({ steamid: z.string().regex(/^\d{17}$/) }))
-  .handler(async ({ data }): Promise<{ queued: boolean; alreadyQueued: boolean }> => {
+  .handler(async ({ data }): Promise<RecrawlResult> => {
     const db = getDb();
+    const fail: RecrawlResult = {
+      queued: false,
+      alreadyQueued: false,
+      position: null,
+      etaSeconds: null,
+    };
+
+    // Attempt the enqueue. If the web role lacks INSERT (or any error), we still
+    // fall through to the status read below — the row may already be pending.
+    let inserted = false;
     try {
       const rows = (await db.execute(sql`
         insert into crawl_frontier (steamid, source, priority)
@@ -158,10 +187,66 @@ export const requestRecrawl = createServerFn({ method: "POST" })
         on conflict (steamid) do nothing
         returning steamid
       `)) as unknown as unknown[];
-      // a returned row means we inserted; none means a pending row already existed
-      return { queued: true, alreadyQueued: rows.length === 0 };
+      inserted = rows.length > 0;
     } catch {
-      return { queued: false, alreadyQueued: false };
+      // insert not permitted / conflict path errored — status read still tells us
+    }
+
+    // Read queue state: is a row present, how many recrawl rows dequeue ahead of
+    // it, the recent crawl rate, and the total weight of sources with pending
+    // work (SOURCE_WEIGHT mirrors apps/crawler/src/index.ts drawOne).
+    try {
+      const [r] = (await db.execute(sql`
+        with mine as (
+          select priority, enqueued_at from crawl_frontier where steamid = ${data.steamid}
+        ),
+        ahead as (
+          select count(*)::int n
+          from crawl_frontier cf, mine
+          where cf.source = 'recrawl'
+            and (cf.priority > mine.priority
+              or (cf.priority = mine.priority and cf.enqueued_at < mine.enqueued_at))
+        ),
+        rate as (
+          select count(*) filter (where last_crawled > now() - interval '1 hour')::int per_hour
+          from players
+        ),
+        active as (
+          select coalesce(sum(w), 0)::int total_w from (
+            select distinct source,
+              case source
+                when 'seed' then 8 when 'recrawl' then 5 when 'review_sample' then 3
+                when 'random_sample' then 3 when 'friend_bfs' then 4 else 1
+              end w
+            from crawl_frontier
+            where locked_until is null or locked_until < now()
+          ) s
+        )
+        select
+          (select exists(select 1 from mine)) as present,
+          (select n from ahead) as ahead,
+          (select per_hour from rate) as per_hour,
+          (select total_w from active) as total_w
+      `)) as unknown as [Record<string, unknown> | undefined];
+
+      if (!r || !r["present"]) {
+        // no row present: report insert outcome (usually a transient grant issue)
+        return inserted ? { ...fail, queued: true } : fail;
+      }
+
+      const ahead = Number(r["ahead"] ?? 0);
+      const perHour = Number(r["per_hour"] ?? 0);
+      const totalW = Number(r["total_w"] ?? 0);
+      const position = ahead + 1;
+      // recrawl source (weight 5) share of throughput among sources with work
+      const recrawlPerHour = totalW > 0 ? perHour * (5 / totalW) : 0;
+      const etaSeconds =
+        recrawlPerHour > 0 ? Math.round((position / recrawlPerHour) * 3600) : null;
+
+      return { queued: true, alreadyQueued: !inserted, position, etaSeconds };
+    } catch {
+      // status read failed but the insert may have landed
+      return inserted ? { ...fail, queued: true } : fail;
     }
   });
 

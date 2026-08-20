@@ -27,6 +27,7 @@ import {
   playerFriendsQueryOptions,
   playerInventoryQueryOptions,
   playerQueryOptions,
+  type RecrawlResult,
   requestRecrawl,
 } from "#/server/player";
 import { type PlayerSessions, playerSessionsQueryOptions } from "#/server/sessions";
@@ -439,7 +440,7 @@ function RecrawlButton({
 }: {
   onClick: () => void;
   pending: boolean;
-  result: { queued: boolean; alreadyQueued: boolean } | null;
+  result: RecrawlResult | null;
 }) {
   const done = result?.queued ?? false;
   const label = pending
@@ -449,7 +450,7 @@ function RecrawlButton({
         ? result.alreadyQueued
           ? "already queued"
           : "queued ✓"
-        : "failed — retry"
+        : "couldn't queue — retry"
       : "request recrawl";
   return (
     <div className="ml-auto flex flex-col items-end gap-1">
@@ -461,13 +462,23 @@ function RecrawlButton({
       >
         {label}
       </button>
-      {done && (
-        <span className="max-w-40 text-right text-[10px] leading-tight text-muted-foreground/70">
-          re-crawled within a few minutes
+      {result?.queued && (
+        <span className="max-w-44 text-right text-[10px] leading-tight text-muted-foreground/70">
+          {recrawlEta(result)}
         </span>
       )}
     </div>
   );
+}
+
+/** Human ETA line for a queued recrawl: position in line + rough wait. */
+function recrawlEta(r: RecrawlResult): string {
+  const where =
+    r.position != null ? (r.position <= 1 ? "next in line" : `#${r.position} in line`) : "queued";
+  if (r.etaSeconds == null) return `${where} · crawled soon`;
+  const mins = Math.max(1, Math.round(r.etaSeconds / 60));
+  const wait = r.etaSeconds < 90 ? "under a minute" : mins < 60 ? `~${mins} min` : "~1 hr+";
+  return `${where} · ${wait}`;
 }
 
 /** Casual matches we've observed this player in — name match plus provable
