@@ -9,7 +9,7 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled 
 
 > **Wave 4 (deployed 2026-08-20):** forward attribution (`segment_attributions`), the `stat_windows` builder, map×class playtime attribution (`map_class_playtime`), match/map duration stats, the sampler rethink (longer windows + **points-reset** boundary detection), and item-page strange distribution all shipped to prod. Items below updated to reflect this.
 >
-> **Second wave (in progress, NOT yet deployed):** sessions section on the player page, per-map best-weapons/leaderboards UI, winrate instrumentation, a player-page prod-error fix, and a cross-cutting query-performance pass. Marked 🔧. Final recount happens after this wave deploys.
+> **Second wave (built + merged to `main`, NOT yet deployed):** sessions section on the player page (from `stat_windows`), per-map detail panels on `/matches` (class mix / scorers / regulars / regulars' loadouts), player-page external links (Steam + backpack.tf), a leaderboards board-pill layout fix, and confirmation the msg-192 error was the already-fixed sightings CH bug (now also hardened fail-soft). **Winrates cancelled** (impossible per API — see §1). A cross-cutting query-performance pass is still in progress. Final recount happens after this wave deploys.
 
 ---
 
@@ -38,7 +38,7 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled 
 - [ ] 🔧 **Score/min paired with equipped weapon AND map → best weapons per map** — `/performance` ranks best weapons/combos by pts-hr / kills-hr / dmg-min; the map-attribution backend (`map_class_playtime` + `segment_attributions`) now ships, and the **per-MAP** best-weapons/leaderboards UI is being built this wave.
 - [ ] 🔧 **Player stats over time / best classes over time** — class-stats table + sightings timeline exist; the `stat_windows` builder now ships (§8), and the **sessions section** consuming it on the player page is being built this wave.
 - [ ] ❌ **K/D tracking + per-class K/D + K/D leaderboards** — **impossible via Steam API** (verified: `iNumDeaths` defined in schema but never uploaded; "never present K/D"). Effectively cancelled by API reality.
-- [ ] 🔧 **Winrates** — being instrumented this wave (GCStat win/loss-counter measurement across recrawls; verifying the counters actually move before building trends).
+- [ ] 🚫 **Winrates** — **impossible via Steam API, confirmed by enumerating all ~488 stat names in live `GetUserStatsForGame` blobs.** No matches-played, no loss counter, no global/per-map *matches*-won counter — so there is no denominator for a rate. The only win signal is 7 cumulative *rounds*-won grind counters (Foundry, Process, Standin, Snakewater, Powerhouse, Doomsday, Helltower). A `/round-wins` page was prototyped on those but **removed** (7 maps, no rate — not worth a feature). Do not re-attempt winrates; the data does not exist.
 - [ ] 🟡 **Time played on specific weapons** — no per-weapon playtime from the API; approximated only via equipped-experience thresholds (lifetime / active-2wk minutes on the item).
 - [ ] ❌ **Recover old style.tf droplet-snapshot data** — data remains lost; only the single ISR-cached usage combo (`data/styletf-cached-usage-*.json`) was preserved.
 
