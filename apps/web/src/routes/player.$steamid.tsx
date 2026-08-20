@@ -29,6 +29,7 @@ import {
   playerQueryOptions,
   requestRecrawl,
 } from "#/server/player";
+import { type PlayerSessions, playerSessionsQueryOptions } from "#/server/sessions";
 import { type PlayerSightings, playerSightingsQueryOptions } from "#/server/sightings";
 
 export const Route = createFileRoute("/player/$steamid")({
@@ -40,6 +41,7 @@ export const Route = createFileRoute("/player/$steamid")({
       context.queryClient.ensureQueryData(playerFriendsQueryOptions(params.steamid)),
       context.queryClient.ensureQueryData(friendRanksQueryOptions(params.steamid)),
       context.queryClient.ensureQueryData(playerSightingsQueryOptions(params.steamid)),
+      context.queryClient.ensureQueryData(playerSessionsQueryOptions(params.steamid)),
     ]),
   component: PlayerPage,
 });
@@ -94,6 +96,7 @@ function PlayerPage() {
   const { data: friends } = useSuspenseQuery(playerFriendsQueryOptions(steamid));
   const { data: friendRanks } = useSuspenseQuery(friendRanksQueryOptions(steamid));
   const { data: sightings } = useSuspenseQuery(playerSightingsQueryOptions(steamid));
+  const { data: sessions } = useSuspenseQuery(playerSessionsQueryOptions(steamid));
   const recrawl = useMutation({
     mutationFn: () => requestRecrawl({ data: { steamid } }),
   });
@@ -224,6 +227,8 @@ function PlayerPage() {
       {(sightings.sightings.length > 0 || sightings.ambiguous > 0) && (
         <SightingsSection sightings={sightings} />
       )}
+
+      {sessions.sessions.length > 0 && <SessionsSection sessions={sessions} />}
 
       {bestRanks.length > 0 && (
         <div>
@@ -496,6 +501,79 @@ function SightingsSection({ sightings }: { sightings: PlayerSightings }) {
           also playing then, so we can't attribute them.
         </p>
       )}
+    </div>
+  );
+}
+
+/** Compact play-length label from seconds: "1h 20m", "45m", or "<1m". */
+function formatSessionLength(seconds: number): string {
+  const mins = Math.round(seconds / 60);
+  if (mins < 1) return "<1m";
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h${m > 0 ? ` ${m}m` : ""}` : `${m}m`;
+}
+
+/** Reconstructed play sessions from stat-snapshot deltas (server/sessions.ts):
+ * when the player played, how long, on which class(es), and the map when we
+ * can pin it. Only shown for players the attributor has matched to sampler
+ * segments — hence gated on a non-empty list by the caller. */
+function SessionsSection({ sessions }: { sessions: PlayerSessions }) {
+  return (
+    <div>
+      <h2 className="mb-1 font-heading text-lg font-semibold">Recent sessions</h2>
+      <p className="mb-2 max-w-2xl text-xs text-muted-foreground">
+        Play windows reconstructed from the gap between lifetime-stat snapshots — how long was
+        played and on which class. The map is shown only when we could pin the whole window to a
+        single map via sampler sightings; class time is exact, from Steam's own per-class stats.
+      </p>
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="w-28 text-right">When</TableHead>
+            <TableHead className="w-24 text-right">Played</TableHead>
+            <TableHead>Classes</TableHead>
+            <TableHead className="hidden w-40 sm:table-cell">Map</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sessions.sessions.map((s) => (
+            <TableRow key={`${s.startedAt}:${s.endedAt}`} className="h-9">
+              <TableCell
+                className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground"
+                suppressHydrationWarning
+              >
+                {formatAgo(new Date(s.endedAt * 1000).toISOString())}
+              </TableCell>
+              <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+                {formatSessionLength(s.playtimeSeconds)}
+              </TableCell>
+              <TableCell className="py-1">
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  {s.classes.map((c) => (
+                    <span key={c.classNum} className="flex items-center gap-1">
+                      {CLASS_NAMES[c.classNum] && (
+                        <img
+                          src={`/${CLASS_NAMES[c.classNum]}.svg`}
+                          alt={CLASS_NAMES[c.classNum]}
+                          title={CLASS_NAMES[c.classNum]}
+                          className="h-4 w-4"
+                        />
+                      )}
+                      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {formatSessionLength(c.seconds)}
+                      </span>
+                    </span>
+                  ))}
+                </span>
+              </TableCell>
+              <TableCell className="hidden py-1 font-mono text-xs text-muted-foreground sm:table-cell">
+                {s.map ?? "—"}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   );
 }
