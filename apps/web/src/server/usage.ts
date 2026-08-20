@@ -320,55 +320,6 @@ export const usageInfiniteQueryOptions = (filters: UsageFilters) =>
     getNextPageParam: (last) => last.nextOffset,
   });
 
-/**
- * Strange adoption per reskin group: what fraction of a weapon's equips are
- * Strange quality (11). Keyed by `gid` (the ClickHouse reskin group id), which
- * equals a usage row's `reskinGroup ?? defindex`, so it aligns with both merge
- * modes. Computed over the whole equipped corpus — deliberately independent of
- * the page's population sliders (it's an overall "how often is this run Strange"
- * signal). Ultra-rare groups (<10 equips) are dropped so a lone Strange can't
- * read as 100%.
- */
-export interface StrangeShare {
-  gid: number;
-  /** 0..1 fraction of the group's equips that are Strange quality */
-  strangeShare: number;
-  /** 0..1 fraction that carry a player-applied Name Tag (renamed). Captured
-   * going-forward only, so this is a floor until the corpus turns over. */
-  renamedShare: number;
-  /** total equips in the group (share denominator) */
-  sampleSize: number;
-}
-
-export const fetchStrangeShares = createServerFn({ method: "GET" }).handler(
-  async (): Promise<StrangeShare[]> => {
-    // renamed_ct, NOT `renamed` — an alias matching the real column would get
-    // pushed into WHERE by ClickHouse and break the aggregate.
-    const rows = await chQuery<Record<string, unknown>>(
-      getCh(),
-      `select gid,
-        countIf(quality = 11) as strange,
-        countIf(renamed = 1) as renamed_ct,
-        count() as total
-      from equipped
-      group by gid
-      having total >= 10`,
-    );
-    return rows.map((r) => {
-      const total = Number(r["total"]);
-      return {
-        gid: Number(r["gid"]),
-        strangeShare: total > 0 ? Number(r["strange"]) / total : 0,
-        renamedShare: total > 0 ? Number(r["renamed_ct"]) / total : 0,
-        sampleSize: total,
-      };
-    });
-  },
-);
-
-export const strangeSharesQueryOptions = () =>
-  queryOptions({ queryKey: ["strangeShares"], queryFn: () => fetchStrangeShares() });
-
 /** Per-item week-over-week change in headline usage share. The raw equip counts
  * and population sizes are carried so the client can run a two-proportion z-test
  * (shared helper) and flag noise-level shifts as non-significant. */
