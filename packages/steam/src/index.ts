@@ -11,6 +11,7 @@ import {
   getPlayerBansResponse,
   getPlayerItemsResponse,
   getPlayerSummariesResponse,
+  getNumberOfCurrentPlayersResponse,
   getServerListResponse,
   getUserStatsResponse,
   queryByFakeIpPlayersResponse,
@@ -202,6 +203,16 @@ export class SteamClient {
     );
     if (res.kind !== "ok") return res;
     return { kind: "ok", data: res.data.response.steamid ?? null };
+  }
+
+  /** Live concurrent players for TF2 (appid 440) — the whole game's CCU. */
+  async getCurrentPlayers(): Promise<SteamResult<number>> {
+    const res = await this.#get(
+      "/ISteamUserStats/GetNumberOfCurrentPlayers/v1/",
+      { appid: "440" },
+      getNumberOfCurrentPlayersResponse,
+    );
+    return res.kind === "ok" ? { kind: "ok", data: res.data.response.player_count } : res;
   }
 
   /** Master server list. `filter` uses Valve's \key\value syntax. */

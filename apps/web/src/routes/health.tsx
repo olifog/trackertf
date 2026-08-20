@@ -56,8 +56,14 @@ const frontierSourceLabel = (s: string) => FRONTIER_SOURCE_LABELS[s] ?? s;
 
 function DataPage() {
   const { data } = useSuspenseQuery(healthQueryOptions());
-  const { crawl, corpus, queue, countries, countryKnown } = data;
+  const { crawl, corpus, queue, countries, countryKnown, population } = data;
   const maxCountry = countries[0]?.count ?? 0;
+  // rough coverage: crawled profiles active in 2wk vs the recapture estimate of
+  // players active on casual over 14d. Window/scope mismatch → a proxy, clamped.
+  const coverage =
+    population.estimatedCasual14d && population.estimatedCasual14d > 0
+      ? Math.min(100, (corpus.activePlayers2wk / population.estimatedCasual14d) * 100)
+      : null;
 
   const classBars = data.byClass
     .map((c) => ({
@@ -102,6 +108,42 @@ function DataPage() {
           value={`${fmtCompact(corpus.totalTrackedHours)}h`}
           sub="summed across all profiles"
         />
+      </div>
+
+      <div>
+        <h2 className="mb-2 font-heading text-lg font-semibold">Playerbase &amp; coverage</h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Stat
+            label="players online now"
+            value={population.liveCcu === null ? "—" : fmtCompact(population.liveCcu)}
+            sub={population.liveCcu === null ? "awaiting first sample" : "live concurrent (Steam)"}
+          />
+          <Stat
+            label="peak (14d)"
+            value={population.peakCcu === null ? "—" : fmtCompact(population.peakCcu)}
+            sub="highest concurrent"
+          />
+          <Stat
+            label="est. casual players"
+            value={
+              population.estimatedCasual14d === null
+                ? "—"
+                : fmtCompact(population.estimatedCasual14d)
+            }
+            sub="distinct, 14d (estimate)"
+          />
+          <Stat
+            label="crawl coverage"
+            value={coverage === null ? "—" : `${coverage.toFixed(1)}%`}
+            sub="of est. active casual"
+          />
+        </div>
+        <p className="mt-2 max-w-2xl text-xs text-muted-foreground">
+          Playerbase size is a mark-recapture estimate (Chapman) from distinct in-game names our
+          sampler saw across two 7-day windows — it covers only the Valve casual servers we watch
+          and is deflated by name collisions, so treat it as an order-of-magnitude figure. Coverage
+          compares our profiles active in the last 2 weeks against that estimate.
+        </p>
       </div>
 
       <div className="rounded-lg border bg-card/50 p-4">

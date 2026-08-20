@@ -1,6 +1,8 @@
 import { queryOptions } from "@tanstack/react-query";
 import { createServerFn } from "@tanstack/react-start";
+import { chQuery } from "@trackertf/clickhouse";
 import { sql } from "drizzle-orm";
+import { getCh } from "./ch.ts";
 import { getDb } from "./db.ts";
 
 const num = (v: unknown): number => (v == null ? 0 : Number(v));
@@ -47,6 +49,16 @@ export interface HealthResponse {
   /** top countries in the (POP-filtered) crawled corpus, and the known total */
   countries: { code: string; count: number }[];
   countryKnown: number;
+  /** TF2 playerbase size + how much of it we've crawled */
+  population: {
+    /** most recent global concurrent-player count from Steam, null if none yet */
+    liveCcu: number | null;
+    /** peak concurrent players over the last 14 days */
+    peakCcu: number | null;
+    /** mark-recapture estimate of distinct casual players active over 14 days
+     * (Chapman estimator on sampled in-game names), null if too little data */
+    estimatedCasual14d: number | null;
+  };
   /** class-playtime distribution across the corpus */
   byClass: ClassSlice[];
   lastAnalyserRun: string | null;
@@ -141,6 +153,54 @@ export const fetchHealth = createServerFn({ method: "GET" }).handler(
       sql`select max(computed_at) t from usage_stats`,
     )) as unknown as [{ t: string | Date | null }];
 
+    // Playerbase: live CCU + 14d peak from population_snapshots (empty until the
+    // scanner ships this), and a mark-recapture population estimate from the
+    // sampler's observed names.
+    const [ccu] = (await db.execute(sql`
+      select
+        (select current_players from population_snapshots
+          order by scanned_at desc limit 1) as live,
+        (select max(current_players)::int from population_snapshots
+          where scanned_at > now() - interval '14 days') as peak
+    `)) as unknown as [Record<string, unknown> | undefined];
+
+    // Two-sample Chapman estimator of distinct casual players active over 14d.
+    // Splits observed names into two 7-day windows: n1/n2 are the distinct names
+    // seen in each, m the overlap. Normalization mirrors normalizeName so a name
+    // keys the same in both windows. Sampler-scoped + name-collision caveats
+    // apply — this is a rough estimate, not a census.
+    let estimatedCasual14d: number | null = null;
+    try {
+      const [rec] = await chQuery<{ n1: string; n2: string; m: string }>(
+        getCh(),
+        `select
+          countIf(w1 > 0) as n1,
+          countIf(w2 > 0) as n2,
+          countIf(w1 > 0 and w2 > 0) as m
+        from (
+          select
+            trimBoth(replaceRegexpAll(replaceRegexpAll(lowerUTF8(name),
+              '[\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{FEFF}]', ''),
+              '\\s+', ' ')) as nm,
+            countIf(started_at <= now() - toIntervalDay(7)) as w1,
+            countIf(started_at > now() - toIntervalDay(7)) as w2
+          from match_obs
+          where started_at > now() - toIntervalDay(14)
+          group by nm
+          having nm != ''
+        )`,
+      );
+      const n1 = num(rec?.n1);
+      const n2 = num(rec?.n2);
+      const m = num(rec?.m);
+      // Chapman: N̂ = (n1+1)(n2+1)/(m+1) − 1, only meaningful with overlap
+      if (n1 > 0 && n2 > 0 && m > 0) {
+        estimatedCasual14d = Math.round(((n1 + 1) * (n2 + 1)) / (m + 1) - 1);
+      }
+    } catch (err) {
+      console.warn("recapture estimate failed:", err);
+    }
+
     return {
       api,
       crawl: {
@@ -164,6 +224,11 @@ export const fetchHealth = createServerFn({ method: "GET" }).handler(
       },
       countries,
       countryKnown: num(corpus?.["country_known"]),
+      population: {
+        liveCcu: ccu?.["live"] == null ? null : num(ccu["live"]),
+        peakCcu: ccu?.["peak"] == null ? null : num(ccu["peak"]),
+        estimatedCasual14d,
+      },
       byClass,
       lastAnalyserRun: analyser?.t ? new Date(analyser.t).toISOString() : null,
     };

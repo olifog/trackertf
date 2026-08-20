@@ -144,3 +144,8 @@ export const queryByFakeIpRulesResponse = z.object({
 export const resolveVanityResponse = z.object({
   response: z.object({ success: z.number(), steamid: z.string().optional() }),
 });
+
+/** GetNumberOfCurrentPlayers: result 1 = ok. Live concurrent players for an app. */
+export const getNumberOfCurrentPlayersResponse = z.object({
+  response: z.object({ result: z.number().optional(), player_count: z.number() }),
+});

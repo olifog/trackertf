@@ -299,6 +299,14 @@ export const serverEmptySnapshots = pgTable(
   ],
 );
 
+/** TF2's live global concurrent-player count (Steam GetNumberOfCurrentPlayers),
+ * sampled once per scan. The hard ground-truth denominator for "how much of the
+ * playerbase do we cover" — independent of our crawl. Written by scanner.ts. */
+export const populationSnapshots = pgTable("population_snapshots", {
+  scannedAt: timestamp({ withTimezone: true }).primaryKey(),
+  currentPlayers: integer().notNull(),
+});
+
 /**
  * One continuous run of sampler observations of a single Valve casual server
  * (identified by its GetServerList steamid) on one map. A map change or the

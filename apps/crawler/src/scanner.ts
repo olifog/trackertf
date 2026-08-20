@@ -161,11 +161,22 @@ async function scan(): Promise<void> {
     await db.insert(schema.serverEmptySnapshots).values(emptyRows).onConflictDoNothing();
   }
 
+  // TF2's live global CCU — the ground-truth denominator for crawl coverage,
+  // independent of the server scan. One extra API call per scan.
+  const ccu = await steam.getCurrentPlayers();
+  if (ccu.kind === "ok") {
+    await db
+      .insert(schema.populationSnapshots)
+      .values({ scannedAt, currentPlayers: ccu.data })
+      .onConflictDoNothing();
+  }
+
   const totals = rows.reduce((a, r) => a + r.players, 0);
   const emptyCount = emptyRows.reduce((a, e) => a + e.servers, 0);
   console.log(
     `scan ${scannedAt.toISOString()}: ${servers.length} servers, ${totals} players, ` +
-      `${rows.length} agg rows, ${emptyCount} empty community servers`,
+      `${rows.length} agg rows, ${emptyCount} empty community servers, ` +
+      `ccu ${ccu.kind === "ok" ? ccu.data : ccu.kind}`,
   );
 }
 
