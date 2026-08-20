@@ -23,6 +23,13 @@ import {
 import { avatarUrl } from "#/lib/tf2";
 import { type DurationRow, matchDurationsQueryOptions } from "#/server/matchDurations";
 import { type MapClassRow, mapClassPlaytimeQueryOptions } from "#/server/mapClass";
+import {
+  type MapDetail,
+  type MapRegular,
+  type MapScorer,
+  type MapWeapon,
+  mapDetailQueryOptions,
+} from "#/server/mapDetail";
 import type { GamemodeKey } from "#/server/servers";
 import {
   attributionsForSegmentsQueryOptions,
@@ -544,15 +551,17 @@ function classColor(classNum: number): string {
 function MapClassSection() {
   const { data, isLoading } = useQuery(mapClassPlaytimeQueryOptions());
   const maps = data?.maps ?? [];
+  const [openMap, setOpenMap] = useState<string | null>(null);
 
   return (
     <section className="space-y-3">
-      <h2 className="font-heading text-lg font-semibold">Class playtime by map</h2>
+      <h2 className="font-heading text-lg font-semibold">Maps</h2>
       <p className="max-w-3xl text-sm text-muted-foreground">
         How the class mix shifts map to map. We take each attributed player's per-class playtime
         gain over windows where all their high-confidence sampled matches sat on one map, and
         attribute that time to the map. It's inferred, not observed, so it builds up slowly and
-        inherits the name→profile matching uncertainty — read it as a trend, not a census.
+        inherits the name→profile matching uncertainty — read it as a trend, not a census. Click a
+        map for its fastest observed scorers, regulars and more.
       </p>
 
       {maps.length > 0 && (
@@ -568,33 +577,48 @@ function MapClassSection() {
               </span>
             ))}
           </div>
-          <div className="space-y-2">
-            {maps.map((m: MapClassRow) => (
-              <div key={m.map} className="grid grid-cols-[10rem_1fr_5rem] items-center gap-3">
-                <div className="min-w-0">
-                  <div className="truncate font-mono text-xs">{m.map}</div>
-                  <div className="text-[10px] text-muted-foreground">
-                    {GAMEMODE_LABELS[m.gamemode]}
-                  </div>
+          <div className="space-y-1">
+            {maps.map((m: MapClassRow) => {
+              const isOpen = openMap === m.map;
+              return (
+                <div key={m.map} className="rounded-md">
+                  <button
+                    type="button"
+                    onClick={() => setOpenMap(isOpen ? null : m.map)}
+                    className={`grid w-full grid-cols-[1rem_10rem_1fr_5rem] items-center gap-3 rounded-md px-1 py-1 text-left transition-colors hover:bg-accent/50 ${
+                      isOpen ? "bg-accent/40" : ""
+                    }`}
+                  >
+                    <span className="text-center font-mono text-[11px] text-primary/70">
+                      {isOpen ? "▾" : "▸"}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate font-mono text-xs">{m.map}</span>
+                      <span className="block text-[10px] text-muted-foreground">
+                        {GAMEMODE_LABELS[m.gamemode]}
+                      </span>
+                    </span>
+                    <span className="flex h-4 w-full overflow-hidden rounded bg-secondary/40">
+                      {m.classes.map((c) => (
+                        <span
+                          key={c.classNum}
+                          className="h-full"
+                          style={{
+                            width: `${c.share * 100}%`,
+                            backgroundColor: classColor(c.classNum),
+                          }}
+                          title={`${CLASS_NAMES[c.classNum] ?? c.classNum}: ${fmtDuration(c.seconds)} (${(c.share * 100).toFixed(0)}%)`}
+                        />
+                      ))}
+                    </span>
+                    <span className="text-right text-[11px] tabular-nums text-muted-foreground">
+                      {fmtDuration(m.totalSeconds)}
+                    </span>
+                  </button>
+                  {isOpen && <MapDetailPanel map={m.map} />}
                 </div>
-                <div className="flex h-4 w-full overflow-hidden rounded bg-secondary/40">
-                  {m.classes.map((c) => (
-                    <div
-                      key={c.classNum}
-                      className="h-full"
-                      style={{
-                        width: `${c.share * 100}%`,
-                        backgroundColor: classColor(c.classNum),
-                      }}
-                      title={`${CLASS_NAMES[c.classNum] ?? c.classNum}: ${fmtDuration(c.seconds)} (${(c.share * 100).toFixed(0)}%)`}
-                    />
-                  ))}
-                </div>
-                <div className="text-right text-[11px] tabular-nums text-muted-foreground">
-                  {fmtDuration(m.totalSeconds)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}
@@ -607,6 +631,210 @@ function MapClassSection() {
         </div>
       )}
     </section>
+  );
+}
+
+/** Expanded per-map surface: full class mix, observed top scorers, regulars,
+ * and (indirect) the loadouts those regulars run. Lazy, non-blocking. */
+function MapDetailPanel({ map }: { map: string }) {
+  const { data, isLoading } = useQuery(mapDetailQueryOptions(map));
+  if (isLoading || !data) {
+    return (
+      <div className="px-6 py-3 font-mono text-xs text-muted-foreground">loading map…</div>
+    );
+  }
+  return (
+    <div className="grid gap-6 rounded-b-md border-x border-b bg-card/40 px-4 py-4 lg:grid-cols-2">
+      <MapClassMix detail={data} />
+      <MapScorers scorers={data.topScorers} />
+      <MapRegulars regulars={data.regulars} regularCount={data.regularCount} />
+      <MapWeapons weapons={data.weapons} regularCount={data.regularCount} />
+    </div>
+  );
+}
+
+function MapClassMix({ detail }: { detail: MapDetail }) {
+  const withTime = detail.classMix.filter((c) => c.seconds > 0);
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold">Class mix</h3>
+      {withTime.length > 0 ? (
+        <>
+          <div className="space-y-1">
+            {withTime.map((c) => (
+              <div key={c.classNum} className="flex items-center gap-2 text-xs">
+                <span
+                  className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
+                  style={{ backgroundColor: classColor(c.classNum) }}
+                />
+                <span className="w-16 shrink-0">{CLASS_NAMES[c.classNum] ?? c.classNum}</span>
+                <span className="h-2 flex-1 overflow-hidden rounded bg-secondary/40">
+                  <span
+                    className="block h-full"
+                    style={{
+                      width: `${c.share * 100}%`,
+                      backgroundColor: classColor(c.classNum),
+                    }}
+                  />
+                </span>
+                <span className="w-10 text-right tabular-nums text-muted-foreground">
+                  {(c.share * 100).toFixed(0)}%
+                </span>
+                <span className="w-14 text-right tabular-nums text-muted-foreground">
+                  {fmtDuration(c.seconds)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {fmtDuration(detail.totalSeconds)} attributed · ~{detail.classPlayers} players ·{" "}
+            {detail.windows} windows
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No attributed class playtime for this map yet.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MapScorers({ scorers }: { scorers: MapScorer[] }) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold">Fastest observed scorers</h3>
+      {scorers.length > 0 ? (
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-8 text-right">#</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead className="w-24 text-right">Pts/hr</TableHead>
+              <TableHead className="w-16 text-right">Span</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {scorers.map((s, i) => (
+              <TableRow key={`${s.segmentId}:${s.name}`} className="h-8">
+                <TableCell className="py-0.5 text-right font-mono text-muted-foreground">
+                  {i + 1}
+                </TableCell>
+                <TableCell className="max-w-0 overflow-hidden py-0.5 truncate font-mono text-xs">
+                  {s.name}
+                </TableCell>
+                <TableCell className="py-0.5 text-right font-mono text-sm tabular-nums">
+                  {fmtPph(s.pointsPerHour)}
+                </TableCell>
+                <TableCell className="py-0.5 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                  {fmtDuration(s.windowSec)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No scorers observed on this map with a long enough window yet.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MapRegulars({
+  regulars,
+  regularCount,
+}: {
+  regulars: MapRegular[];
+  regularCount: number;
+}) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold">Regulars</h3>
+      {regulars.length > 0 ? (
+        <>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {regulars.map((r) => {
+              const avatar = avatarUrl(r.avatarHash);
+              return (
+                <Link
+                  key={r.steamid}
+                  to="/player/$steamid"
+                  params={{ steamid: r.steamid }}
+                  className="flex items-center gap-2 rounded border bg-card/40 px-2 py-1 hover:bg-accent/40"
+                >
+                  {avatar ? (
+                    <img src={avatar} alt="" className="h-6 w-6 shrink-0 rounded" />
+                  ) : (
+                    <span className="h-6 w-6 shrink-0 rounded bg-secondary/60" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-xs text-primary">
+                    {r.personaname ?? r.steamid}
+                  </span>
+                  <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                    ×{r.segments}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {regularCount} profile{regularCount === 1 ? "" : "s"} attributed here (≥ 0.9). ×N =
+            distinct sampled segments on this map. High-confidence matches, not certainties.
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No high-confidence profile attributions on this map yet.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MapWeapons({
+  weapons,
+  regularCount,
+}: {
+  weapons: MapWeapon[];
+  regularCount: number;
+}) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold">What the regulars run</h3>
+      {weapons.length > 0 ? (
+        <>
+          <div className="flex flex-wrap gap-1.5">
+            {weapons.map((w) => (
+              <span
+                key={w.defindex}
+                className="inline-flex items-center gap-1.5 rounded border bg-card/40 px-2 py-1 text-xs"
+                title={`${w.players} of this map's regulars equip ${w.name}`}
+              >
+                {w.imageUrl ? (
+                  <img src={w.imageUrl} alt="" className="h-5 w-5 shrink-0 object-contain" />
+                ) : null}
+                <span className="max-w-[9rem] truncate">{w.name}</span>
+                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {w.players}
+                </span>
+              </span>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            The <em>global</em> loadouts of the profiles attributed to this map — what these players
+            equip overall, not weapon performance on this map (TF2 has no per-map weapon telemetry).
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {regularCount < 12
+            ? "Too few regulars attributed to this map to summarise their loadouts yet."
+            : "No equipped-loadout data for this map's regulars yet."}
+        </p>
+      )}
+    </div>
   );
 }
 
