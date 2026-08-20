@@ -39,6 +39,10 @@ export const fetchRecentSegments = createServerFn({ method: "GET" })
   .handler(async ({ data }): Promise<SegmentRow[]> => {
     const rows = await chQuery<Record<string, unknown>>(
       getCh(),
+      // Bound the scan by the table's sort-key prefix (started_at): grouping the
+      // full, ever-growing match_obs before ordering meant the cost climbed with
+      // history even though we only ever show the newest N. 30 days always
+      // covers the display window (max 200 rows, days filter ≤ 14 elsewhere).
       `select toString(segment_id) as segment_id,
         any(map) as map,
         any(region) as region,
@@ -47,6 +51,7 @@ export const fetchRecentSegments = createServerFn({ method: "GET" })
         toUInt32(count()) as participants,
         toUInt32(max(observations)) as rounds
       from match_obs
+      where started_at > now() - toIntervalDay(30)
       group by segment_id
       order by started_at desc
       limit {limit:UInt32}`,
@@ -312,16 +317,39 @@ export const resolveParticipant = createServerFn({ method: "GET" })
     }),
   )
   .handler(async ({ data }): Promise<ParticipantMatch> => {
-    // Segment + observed-score context from ClickHouse (same source as the page).
-    const ctxRows = await chQuery<Record<string, unknown>>(
-      getCh(),
-      `select any(map) as map, any(region) as region,
-        toUnixTimestamp(any(started_at)) as started_at,
-        any(first_score) as first_score, any(last_score) as last_score
-      from match_obs
-      where segment_id = {segmentId:UInt64} and name = {name:String}`,
-      { segmentId: data.segmentId, name: data.name },
-    );
+    const norm = normalizeName(data.name);
+    const db = getDb();
+
+    // The segment context (ClickHouse) and the candidate-profile lookup
+    // (Postgres) are independent round trips against different stores — issue
+    // them concurrently. Candidate lookup is skipped when the name normalizes
+    // empty (nothing to match), matching the original early-return semantics.
+    // The GIN pg_trgm index on lower(personaname) serves the `%` fuzzy
+    // predicate; exact normalized matches always pass it.
+    const [ctxRows, candRows] = await Promise.all([
+      chQuery<Record<string, unknown>>(
+        getCh(),
+        `select any(map) as map, any(region) as region,
+          toUnixTimestamp(any(started_at)) as started_at,
+          any(first_score) as first_score, any(last_score) as last_score
+        from match_obs
+        where segment_id = {segmentId:UInt64} and name = {name:String}`,
+        { segmentId: data.segmentId, name: data.name },
+      ),
+      norm.length === 0
+        ? Promise.resolve([] as Record<string, unknown>[])
+        : (db.execute(sql`
+            select steamid, personaname, avatar_hash, loccountrycode, tf2_minutes_2wk,
+              similarity(lower(personaname), ${norm}) as sim,
+              (regexp_replace(lower(btrim(personaname)), '\\s+', ' ', 'g') = ${norm}) as exact
+            from players
+            where personaname is not null
+              and lower(personaname) % ${norm}
+            order by exact desc, sim desc
+            limit 50
+          `) as unknown as Promise<Record<string, unknown>[]>),
+    ]);
+
     const ctx = ctxRows[0];
     const startedAt = num(ctx?.["started_at"]);
     const firstScore = ctx == null ? null : num(ctx["first_score"]);
@@ -329,7 +357,6 @@ export const resolveParticipant = createServerFn({ method: "GET" })
     const observedScoreGain =
       firstScore == null || lastScore == null ? null : Math.max(0, lastScore - firstScore);
 
-    const norm = normalizeName(data.name);
     const empty: ParticipantMatch = {
       observedName: data.name,
       segment: {
@@ -342,21 +369,6 @@ export const resolveParticipant = createServerFn({ method: "GET" })
       candidates: [],
     };
     if (norm.length === 0) return empty;
-
-    const db = getDb();
-
-    // Candidate profiles by name. The GIN pg_trgm index on lower(personaname)
-    // serves the `%` fuzzy predicate; exact normalized matches always pass it.
-    const candRows = (await db.execute(sql`
-      select steamid, personaname, avatar_hash, loccountrycode, tf2_minutes_2wk,
-        similarity(lower(personaname), ${norm}) as sim,
-        (regexp_replace(lower(btrim(personaname)), '\\s+', ' ', 'g') = ${norm}) as exact
-      from players
-      where personaname is not null
-        and lower(personaname) % ${norm}
-      order by exact desc, sim desc
-      limit 50
-    `)) as unknown as Record<string, unknown>[];
 
     if (candRows.length === 0) return empty;
 

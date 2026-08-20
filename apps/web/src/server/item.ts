@@ -82,45 +82,48 @@ export const fetchItem = createServerFn({ method: "GET" })
 
     const groupDefindexes =
       groupMembers.length > 0 ? groupMembers.map((m) => m.defindex) : [item.defindex];
-    const variantQualities = (await db.execute(sql`
-      select defindex, quality, count(*)::int as count
-      from equipped_items
-      where defindex in (${sql.join(groupDefindexes, sql`, `)})
-      group by defindex, quality
-    `)) as unknown as Record<string, unknown>[];
 
-    // usage_stats now buckets populations (active_minutes_2wk × minutes) —
-    // keep this page's original 2×2 matrix by selecting the matching buckets
-    const usage = (await db.execute(sql`
-      select class_num, (active_minutes_2wk >= 1) as active_only, minutes_threshold,
-             usage, count, sample_size
-      from usage_stats
-      where defindex = ${groupId} and slot = -1 and merge_reskins
-        and active_minutes_2wk in (0, 1) and minutes_threshold in (0, 120000)
-      order by class_num
-    `)) as unknown as Record<string, unknown>[];
-
-    const perf = await db
-      .select({
-        classNum: schema.weaponClassStats.classNum,
-        players: schema.weaponClassStats.players,
-        avgPointsPerMin: schema.weaponClassStats.avgPointsPerMin,
-        avgKillsPerHour: schema.weaponClassStats.avgKillsPerHour,
-        avgDamagePerMin: schema.weaponClassStats.avgDamagePerMin,
-      })
-      .from(schema.weaponClassStats)
-      .where(
-        or(
-          eq(schema.weaponClassStats.defindex, groupId),
-          inArray(
-            schema.weaponClassStats.defindex,
-            // stock melee ids the pan family folds into on class views
-            item.reskinGroup === 264 || item.defindex === 264
-              ? [0, 1, 2, 3, 4, 5, 6, 7, 8]
-              : [groupId],
+    // variantQualities, usage and perf are independent reads once the group is
+    // known — fire them concurrently rather than in series (postgres.js pools).
+    const [variantQualities, usage, perf] = await Promise.all([
+      db.execute(sql`
+        select defindex, quality, count(*)::int as count
+        from equipped_items
+        where defindex in (${sql.join(groupDefindexes, sql`, `)})
+        group by defindex, quality
+      `) as unknown as Promise<Record<string, unknown>[]>,
+      // usage_stats now buckets populations (active_minutes_2wk × minutes) —
+      // keep this page's original 2×2 matrix by selecting the matching buckets
+      db.execute(sql`
+        select class_num, (active_minutes_2wk >= 1) as active_only, minutes_threshold,
+               usage, count, sample_size
+        from usage_stats
+        where defindex = ${groupId} and slot = -1 and merge_reskins
+          and active_minutes_2wk in (0, 1) and minutes_threshold in (0, 120000)
+        order by class_num
+      `) as unknown as Promise<Record<string, unknown>[]>,
+      db
+        .select({
+          classNum: schema.weaponClassStats.classNum,
+          players: schema.weaponClassStats.players,
+          avgPointsPerMin: schema.weaponClassStats.avgPointsPerMin,
+          avgKillsPerHour: schema.weaponClassStats.avgKillsPerHour,
+          avgDamagePerMin: schema.weaponClassStats.avgDamagePerMin,
+        })
+        .from(schema.weaponClassStats)
+        .where(
+          or(
+            eq(schema.weaponClassStats.defindex, groupId),
+            inArray(
+              schema.weaponClassStats.defindex,
+              // stock melee ids the pan family folds into on class views
+              item.reskinGroup === 264 || item.defindex === 264
+                ? [0, 1, 2, 3, 4, 5, 6, 7, 8]
+                : [groupId],
+            ),
           ),
         ),
-      );
+    ]);
 
     return {
       item: toInfo(item),
@@ -367,7 +370,12 @@ export const fetchStrangeDist = createServerFn({ method: "GET" })
       sql` `,
     );
 
-    const [summary] = (await db.execute(sql`
+    // Both the percentile summary and the per-tier histogram derive from the
+    // same `copies` scan (equipped_items ⋈ players, ~one index-range + hashagg).
+    // Computing them in two statements scanned it twice; a single statement
+    // materializes the multiply-referenced CTE once and returns the summary and
+    // the tier array as two json columns of one row.
+    const [row] = (await db.execute(sql`
       with copies as (
         select max(e.strange_kills) as k
         from equipped_items e
@@ -375,32 +383,31 @@ export const fetchStrangeDist = createServerFn({ method: "GET" })
         where e.defindex in (${idList}) and e.quality = 11 and e.strange_kills > 0
           and coalesce(p.botness, 0) < 0.5
         group by e.steamid, e.class_num
+      ),
+      summary as (
+        select
+          count(*)::int as copies,
+          coalesce(avg(k), 0)::float as avg_kills,
+          coalesce(percentile_cont(0.5) within group (order by k), 0)::float as median_kills,
+          coalesce(percentile_cont(0.9) within group (order by k), 0)::float as p90_kills,
+          coalesce(max(k), 0)::int as max_kills
+        from copies
+      ),
+      tiers as (
+        select (case ${tierCase} else 0 end)::int as tier, count(*)::int as count
+        from copies
+        group by tier
       )
       select
-        count(*)::int as copies,
-        coalesce(avg(k), 0)::float as avg_kills,
-        coalesce(percentile_cont(0.5) within group (order by k), 0)::float as median_kills,
-        coalesce(percentile_cont(0.9) within group (order by k), 0)::float as p90_kills,
-        coalesce(max(k), 0)::int as max_kills
-      from copies
-    `)) as unknown as [Record<string, unknown> | undefined];
+        (select row_to_json(summary) from summary) as summary,
+        coalesce((select json_agg(row_to_json(tiers)) from tiers), '[]'::json) as tiers
+    `)) as unknown as [{ summary: Record<string, unknown> | null; tiers: Record<string, unknown>[] } | undefined];
 
+    const summary = row?.summary ?? null;
     const copies = Number(summary?.["copies"] ?? 0);
     if (copies === 0) return null;
 
-    const tierRows = (await db.execute(sql`
-      with copies as (
-        select max(e.strange_kills) as k
-        from equipped_items e
-        join players p using (steamid)
-        where e.defindex in (${idList}) and e.quality = 11 and e.strange_kills > 0
-          and coalesce(p.botness, 0) < 0.5
-        group by e.steamid, e.class_num
-      )
-      select (case ${tierCase} else 0 end)::int as tier, count(*)::int as count
-      from copies
-      group by tier
-    `)) as unknown as Record<string, unknown>[];
+    const tierRows = row?.tiers ?? [];
 
     const nameByFloor = new Map(STRANGE_RANKS.map((r) => [r.kills, r.name]));
     const tiers: StrangeTier[] = tierRows
