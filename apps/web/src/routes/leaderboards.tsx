@@ -104,6 +104,30 @@ function boardKeyFor(def: BoardDef, scope: BoardScope, hours: number): string {
     : `${def.metric}:${scope}:total`;
 }
 
+/** Top-level board buckets: the picker is two levels — pick a bucket, then a
+ * metric within it. "strange" is the overall-only CH-backed group. */
+type BoardBucket = "total" | "per_hour" | "strange";
+
+/** The board to land on when switching to `bucket`, preserving the current
+ * metric / scope / rate threshold where the target has an equivalent. Playtime
+ * has no per-hour board (it's identically 1), so per-hour falls back to kills. */
+function bucketDefaultKey(
+  bucket: BoardBucket,
+  metric: BoardDef["metric"],
+  scope: BoardScope,
+  hours: number,
+): string {
+  if (bucket === "strange") return STRANGE_BOARDS[0]!.key;
+  if (bucket === "total") {
+    if (metric === "hours" || metric === "playtime") {
+      return scope === "overall" ? "hours" : `playtime:${scope}:total`;
+    }
+    return `${metric}:${scope}:total`;
+  }
+  const m = metric === "hours" || metric === "playtime" ? "kills" : metric;
+  return `${m}:${scope}:per_hour:${hours}h`;
+}
+
 function formatValue(value: number, decimals: number): string {
   return value.toLocaleString(undefined, {
     minimumFractionDigits: decimals,
@@ -219,13 +243,17 @@ function LeaderboardsPage() {
   const perClass = def.scope !== "overall";
   const currentHours = def.minRateHours ?? DEFAULT_RATE_HOURS;
 
-  // one pill per (metric, kind) of the active scope — rate boards surface at
-  // the currently selected threshold, the slider swaps variants. Strange
-  // boards are overall-only, so they ride alongside the overall grid pills.
-  const gridOptions = BOARDS.filter(
-    (b) => b.scope === def.scope && (b.kind === "total" || b.minRateHours === currentHours),
-  );
-  const boardOptions = def.scope === "overall" ? [...gridOptions, ...STRANGE_BOARDS] : gridOptions;
+  // Two-level picker: the active bucket comes from the current board, and the
+  // lower pills are just the metrics within it. Strange boards are overall-only.
+  const bucket: BoardBucket = strange ? "strange" : def.kind;
+  const lowerOptions =
+    bucket === "strange"
+      ? STRANGE_BOARDS
+      : bucket === "per_hour"
+        ? BOARDS.filter(
+            (b) => b.scope === def.scope && b.kind === "per_hour" && b.minRateHours === currentHours,
+          )
+        : BOARDS.filter((b) => b.scope === def.scope && b.kind === "total");
 
   return (
     <div className="space-y-5">
@@ -259,9 +287,34 @@ function LeaderboardsPage() {
           </FilterRow>
         )}
 
+        <FilterRow label="Type">
+          <Segmented>
+            <Segment
+              active={bucket === "total"}
+              board={bucketDefaultKey("total", def.metric, def.scope, currentHours)}
+            >
+              Total
+            </Segment>
+            <Segment
+              active={bucket === "per_hour"}
+              board={bucketDefaultKey("per_hour", def.metric, def.scope, currentHours)}
+            >
+              Per hour
+            </Segment>
+            {def.scope === "overall" && (
+              <Segment
+                active={bucket === "strange"}
+                board={bucketDefaultKey("strange", def.metric, def.scope, currentHours)}
+              >
+                Strange
+              </Segment>
+            )}
+          </Segmented>
+        </FilterRow>
+
         <FilterRow label="Board">
           <div className="flex flex-wrap gap-1.5">
-            {boardOptions.map((b) => (
+            {lowerOptions.map((b) => (
               <BoardPill key={b.key} active={b.key === board} board={b.key} title={b.label}>
                 {b.shortLabel}
               </BoardPill>
@@ -269,7 +322,7 @@ function LeaderboardsPage() {
           </div>
         </FilterRow>
 
-        {def.kind === "per_hour" && (
+        {bucket === "per_hour" && (
           <FilterRow label="Min hours">
             <ThresholdSlider def={def} />
             <span className="text-[11px] text-muted-foreground">
