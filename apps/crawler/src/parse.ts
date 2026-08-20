@@ -23,14 +23,26 @@ export const SLOT_COSMETIC = 7;
 export const SLOT_TAUNT = 8;
 
 /**
- * Physical equip slots 4/6 mean different things per class (spy: sapper/watch,
- * engineer: destruction PDA/toolbox). Remap engineer's to the semantic PDA
- * slot (5) so slot filters mean one thing: 4=sapper, 5=PDAs, 6=watch.
+ * Physical equip slots mean different things per class. Engineer's PDA physical
+ * slots (4 destruction, 6 toolbox) fold into the semantic PDA slot (5). Spy's
+ * physical layout is shifted — revolver=1, knife=2, disguise=3, sapper=4,
+ * watch=6, with physical slot 0 empty — so remap the revolver to Primary (0) and
+ * the sapper to Secondary (1); knife (2) and watch (6) already sit correctly.
+ * Result: slot filters mean one thing per class — 0=Primary, 1=Secondary,
+ * 2=Melee, 5=PDAs, 6=watch.
  */
 function semanticSlot(classNum: number, slot: number): number {
   if (classNum === 9 && (slot === 4 || slot === 6)) return 5;
+  if (classNum === 8) {
+    if (slot === 1) return 0; // revolver → Primary
+    if (slot === 4) return 1; // sapper   → Secondary
+  }
   return slot;
 }
+
+/** Spy's disguise kit (semantic slot 3) — a pseudo-PDA, not a real weapon or
+ * Strange-tracked slot, so it's dropped rather than surfaced as an item/filter. */
+const SPY_DISGUISE_SLOT = 3;
 
 /** Unique — the default quality; stock backfill rows are always Unique. */
 const QUALITY_UNIQUE = 6;
@@ -110,7 +122,7 @@ export function parseEquipped(items: readonly BackpackItem[]): EquippedRow[] {
     }
   }
 
-  return dedupe(out);
+  return dedupe(out).filter((r) => !(r.classNum === 8 && r.slot === SPY_DISGUISE_SLOT));
 }
 
 function dedupe(rows: EquippedRow[]): EquippedRow[] {

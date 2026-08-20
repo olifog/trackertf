@@ -51,8 +51,6 @@ const SLOTS = [
   { num: 0, label: "Primary" },
   { num: 1, label: "Secondary" },
   { num: 2, label: "Melee" },
-  { num: 3, label: "Disguise Kit" },
-  { num: 4, label: "Sapper" },
   { num: 5, label: "PDA" },
   { num: 6, label: "Watch" },
   { num: 7, label: "Cosmetic" },

@@ -90,7 +90,8 @@ export const performanceFiltersSchema = z.object({
   /** -1 = overall (all classes), 1-9 = Web API class number */
   class: z.number().int().min(-1).max(9).catch(-1).default(-1),
   /**
-   * -1 = all weapon slots; 0=Primary 1=Secondary 2=Melee 4=Sapper 6=Watch.
+   * -1 = all weapon slots; 0=Primary 1=Secondary 2=Melee 6=Watch (spy sapper
+   * folds into Secondary).
    * (3/5 are PDA/builder — already excluded — so aren't offered.) Applies only
    * to subject:items; combos span slots and ignore it.
    */

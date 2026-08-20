@@ -86,7 +86,7 @@ async function recomputeBotness(): Promise<void> {
         count(distinct e.class_num) filter (where pcs.playtime_seconds >= 36000)::int as played_classes,
         count(*) filter (where pcs.playtime_seconds >= 36000)::int as weapon_slots,
         count(*) filter (where pcs.playtime_seconds >= 36000 and e.defindex in
-          (0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,29,30))::int as stock_slots
+          (0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,29,30,735))::int as stock_slots
       from equipped_items e
       join player_class_stats pcs on pcs.steamid = e.steamid and pcs.class_num = e.class_num
       where e.slot in (0, 1, 2)

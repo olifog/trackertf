@@ -30,12 +30,12 @@ const DEFAULT_FILTERS = {
   reskins: true,
 } as const;
 
-/** weapon slots offered on the performance page (PDA/builder slots excluded) */
+/** weapon slots offered on the performance page (PDA/builder slots excluded;
+ * the spy sapper now folds into Secondary) */
 const SLOTS = [
   { num: 0, label: "Primary" },
   { num: 1, label: "Secondary" },
   { num: 2, label: "Melee" },
-  { num: 4, label: "Sapper" },
   { num: 6, label: "Watch" },
 ] as const;
 
