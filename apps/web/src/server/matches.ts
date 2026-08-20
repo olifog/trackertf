@@ -435,3 +435,61 @@ export const resolveParticipantQueryOptions = (segmentId: string, name: string) 
     queryKey: ["resolveParticipant", segmentId, name],
     queryFn: () => resolveParticipant({ data: { segmentId, name } }),
   });
+
+/* -------------------------------------------------------------------------- */
+/* Forward attribution (>= 0.9) — asserted identities from the attributor       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * High-confidence (>= 0.9) name→profile attributions the offline attributor
+ * asserted for a batch of segments (Postgres `segment_attributions`, written by
+ * apps/crawler/src/attributor.ts using the SAME scoring as resolveParticipant).
+ * Unlike the on-demand candidate list this is a committed identity, so the page
+ * can link straight to the profile. Batched by segment id so one query annotates
+ * both the leaderboard and the expanded segment tables.
+ */
+export interface SegmentAttribution {
+  segmentId: string;
+  name: string;
+  steamid: string;
+  personaname: string | null;
+  avatarHash: string | null;
+  confidence: number;
+  strong: boolean;
+}
+
+export const fetchAttributionsForSegments = createServerFn({ method: "GET" })
+  .validator(z.object({ segmentIds: z.array(z.string().regex(/^\d+$/)).max(400) }))
+  .handler(async ({ data }): Promise<SegmentAttribution[]> => {
+    if (data.segmentIds.length === 0) return [];
+    const db = getDb();
+    const rows = (await db.execute(sql`
+      select sa.segment_id, sa.name, sa.steamid, sa.confidence, sa.strong,
+        p.personaname, p.avatar_hash
+      from segment_attributions sa
+      join players p on p.steamid = sa.steamid
+      where sa.confidence >= 0.9
+        and sa.segment_id in (
+          select value::bigint
+          from jsonb_array_elements_text(${JSON.stringify(data.segmentIds)}::jsonb)
+        )
+    `)) as unknown as Record<string, unknown>[];
+    return rows.map((r) => ({
+      segmentId: String(r["segment_id"]),
+      name: String(r["name"]),
+      steamid: String(r["steamid"]),
+      personaname: (r["personaname"] as string | null) ?? null,
+      avatarHash: (r["avatar_hash"] as string | null) ?? null,
+      confidence: num(r["confidence"]),
+      strong: r["strong"] === true,
+    }));
+  });
+
+export const attributionsForSegmentsQueryOptions = (segmentIds: string[]) => {
+  const key = [...segmentIds].sort();
+  return queryOptions({
+    queryKey: ["segmentAttributions", key],
+    queryFn: () => fetchAttributionsForSegments({ data: { segmentIds: key } }),
+    enabled: segmentIds.length > 0,
+  });
+};

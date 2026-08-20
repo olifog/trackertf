@@ -455,3 +455,106 @@ export const usageStatsHistory = pgTable(
   },
   (t) => [primaryKey({ columns: [t.defindex, t.day] })],
 );
+
+/**
+ * Forward attribution: a sampled participant NAME (match_participants) resolved
+ * to a real steamid at high confidence, using the SAME evidence-weighted scoring
+ * as the on-demand resolver in apps/web/src/server/matches.ts — name similarity
+ * (0.45) + exact-match uniqueness + recent activity + stat-delta corroboration,
+ * clamped to [0,1]. Only rows with confidence >= 0.9 are written, so a row here
+ * is an ASSERTED identity, not a candidate list. One row per participant.
+ * Written by apps/crawler/src/attributor.ts every pass.
+ * NOTE: web_ro needs SELECT (deployer handles grants).
+ */
+export const segmentAttributions = pgTable(
+  "segment_attributions",
+  {
+    segmentId: bigint({ mode: "number" })
+      .notNull()
+      .references(() => matchSegments.id),
+    /** the raw in-game name from match_participants this attribution is for */
+    name: text().notNull(),
+    steamid: text()
+      .notNull()
+      .references(() => players.steamid),
+    /** combined confidence, 0..1 (only >= 0.9 stored) */
+    confidence: real().notNull(),
+    /** trigram name similarity component, 0..1 */
+    similarity: real().notNull(),
+    exactName: boolean("exact_name").notNull(),
+    recentlyActive: boolean("recently_active").notNull(),
+    /** playtime provably accrued across a snapshot pair spanning the segment */
+    deltaCorroborated: boolean("delta_corroborated").notNull(),
+    /** deltaCorroborated && confidence >= 0.7 (the resolver's "strong" tier) */
+    strong: boolean().notNull(),
+    computedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.segmentId, t.name] }),
+    index("segment_attributions_steamid_idx").on(t.steamid),
+  ],
+);
+
+/**
+ * A delta window between two consecutive stat snapshots of one player — the unit
+ * of session-level attribution. Flags describe whether the window is usable and
+ * what it isolates:
+ *  - reset: a per-class lifetime playtime went BACKWARDS (stats reset / decode
+ *    glitch) → deltas are garbage, excluded from attribution.
+ *  - upload_lag: no class playtime moved at all (GetUserStatsForGame only flushes
+ *    on disconnect, so mid-session snapshots read flat) → no signal to attribute.
+ *  - pure_map: over the window the player's attributed sampler segments (see
+ *    segment_attributions) covered exactly ONE map → the whole class-playtime
+ *    delta is attributable to that map.
+ *  - pure_class: exactly one class's playtime advanced in the window.
+ * classDeltas holds per-class playtime SECONDS gained ({ "<classNum>": seconds }),
+ * positive deltas only. Written/upserted by apps/crawler/src/attributor.ts.
+ */
+export const statWindows = pgTable(
+  "stat_windows",
+  {
+    id: bigserial({ mode: "number" }).primaryKey(),
+    steamid: text()
+      .notNull()
+      .references(() => players.steamid),
+    startedAt: timestamp({ withTimezone: true }).notNull(),
+    endedAt: timestamp({ withTimezone: true }).notNull(),
+    /** total class playtime seconds gained across the window (sum of positive deltas) */
+    playtimeDeltaSec: integer("playtime_delta_sec").notNull().default(0),
+    reset: boolean().notNull().default(false),
+    uploadLag: boolean("upload_lag").notNull().default(false),
+    pureMap: boolean("pure_map").notNull().default(false),
+    pureClass: boolean("pure_class").notNull().default(false),
+    /** the single map when pure_map, else null */
+    map: text(),
+    /** per-class playtime seconds gained, { "<classNum>": seconds } (positive only) */
+    classDeltas: jsonb("class_deltas").notNull(),
+    computedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("stat_windows_key_idx").on(t.steamid, t.startedAt, t.endedAt),
+    index("stat_windows_ended_at_idx").on(t.endedAt),
+  ],
+);
+
+/**
+ * Class playtime attributed to a map: the per-class playtime delta summed over
+ * PURE-MAP, non-reset stat windows (see stat_windows). Answers "how much
+ * <class> time happens on map <map>". Rebuilt (delete+insert) every pass by
+ * apps/crawler/src/attributor.ts.
+ * NOTE: web_ro needs SELECT (deployer handles grants).
+ */
+export const mapClassPlaytime = pgTable(
+  "map_class_playtime",
+  {
+    map: text().notNull(),
+    classNum: smallint().notNull(),
+    playtimeSeconds: bigint("playtime_seconds", { mode: "number" }).notNull().default(0),
+    /** number of contributing pure-map windows */
+    windows: integer().notNull().default(0),
+    /** distinct attributed players contributing */
+    players: integer().notNull().default(0),
+    computedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.map, t.classNum] })],
+);

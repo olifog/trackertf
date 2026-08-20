@@ -50,6 +50,15 @@ services:
       DATABASE_URL: ${DATABASE_URL:?set in .env}
     command: ["bun", "run", "src/analyser.ts"]
 
+  attributor:
+    build:
+      context: .
+      dockerfile: apps/crawler/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set in .env}
+    command: ["bun", "run", "src/attributor.ts"]
+
   syncer:
     build:
       context: .

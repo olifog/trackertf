@@ -22,8 +22,10 @@ import {
 } from "#/components/ui/table";
 import { avatarUrl } from "#/lib/tf2";
 import { type DurationRow, matchDurationsQueryOptions } from "#/server/matchDurations";
+import { type MapClassRow, mapClassPlaytimeQueryOptions } from "#/server/mapClass";
 import type { GamemodeKey } from "#/server/servers";
 import {
+  attributionsForSegmentsQueryOptions,
   matchLeaderboardQueryOptions,
   type LeaderRow,
   matchLeaderFiltersSchema,
@@ -31,6 +33,7 @@ import {
   type ProfileCandidate,
   recentSegmentsQueryOptions,
   resolveParticipantQueryOptions,
+  type SegmentAttribution,
   type SegmentRow,
   segmentQueryOptions,
 } from "#/server/matches";
@@ -478,11 +481,153 @@ function MatchDurationsSection() {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Forward attribution (>= 0.9): committed name→profile links                   */
+/* -------------------------------------------------------------------------- */
+
+type AttrMap = Map<string, SegmentAttribution>;
+const attrKey = (segmentId: string, name: string) => `${segmentId}:${name}`;
+
+/** Inline link to the profile the attributor committed to for an observed name. */
+function AttributedLink({ a }: { a: SegmentAttribution }) {
+  const avatar = avatarUrl(a.avatarHash);
+  return (
+    <Link
+      to="/player/$steamid"
+      params={{ steamid: a.steamid }}
+      onClick={(e) => e.stopPropagation()}
+      className="ml-1.5 inline-flex max-w-[10rem] items-center gap-1 align-middle rounded bg-primary/10 px-1 py-0.5 text-primary hover:bg-primary/20"
+      title={`Attributed to ${a.personaname ?? a.steamid} — confidence ${(a.confidence * 100).toFixed(0)}%${a.strong ? " (strong)" : ""}. High-confidence match, not a certainty.`}
+    >
+      {avatar ? <img src={avatar} alt="" className="h-3.5 w-3.5 shrink-0 rounded-sm" /> : null}
+      <span className="truncate text-[11px] font-medium">→ {a.personaname ?? a.steamid}</span>
+    </Link>
+  );
+}
+
+const CLASS_NAMES: Record<number, string> = {
+  1: "Scout",
+  2: "Sniper",
+  3: "Soldier",
+  4: "Demoman",
+  5: "Medic",
+  6: "Heavy",
+  7: "Pyro",
+  8: "Spy",
+  9: "Engineer",
+};
+
+// 9-hue categorical palette (Tableau-10 derived), indexed by classNum-1. Chosen
+// for mutual contrast and adequate legibility in both light and dark themes.
+const CLASS_COLORS = [
+  "#4e79a7",
+  "#f28e2b",
+  "#e15759",
+  "#76b7b2",
+  "#59a14f",
+  "#edc948",
+  "#b07aa1",
+  "#ff9da7",
+  "#9c755f",
+] as const;
+
+function classColor(classNum: number): string {
+  return CLASS_COLORS[(classNum - 1) % CLASS_COLORS.length] ?? "var(--muted-foreground)";
+}
+
+/**
+ * Class playtime by map — the per-class lifetime-playtime delta attributed to a
+ * single map over "pure-map" windows (see server/mapClass.ts). A stacked share
+ * bar per map shows how the class mix shifts between maps. Attributed, not
+ * directly observed, so it accrues slowly and degrades to an empty state.
+ */
+function MapClassSection() {
+  const { data, isLoading } = useQuery(mapClassPlaytimeQueryOptions());
+  const maps = data?.maps ?? [];
+
+  return (
+    <section className="space-y-3">
+      <h2 className="font-heading text-lg font-semibold">Class playtime by map</h2>
+      <p className="max-w-3xl text-sm text-muted-foreground">
+        How the class mix shifts map to map. We take each attributed player's per-class playtime
+        gain over windows where all their high-confidence sampled matches sat on one map, and
+        attribute that time to the map. It's inferred, not observed, so it builds up slowly and
+        inherits the name→profile matching uncertainty — read it as a trend, not a census.
+      </p>
+
+      {maps.length > 0 && (
+        <>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {Object.entries(CLASS_NAMES).map(([n, label]) => (
+              <span key={n} className="inline-flex items-center gap-1.5 text-[11px]">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-sm"
+                  style={{ backgroundColor: classColor(Number(n)) }}
+                />
+                {label}
+              </span>
+            ))}
+          </div>
+          <div className="space-y-2">
+            {maps.map((m: MapClassRow) => (
+              <div key={m.map} className="grid grid-cols-[10rem_1fr_5rem] items-center gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-xs">{m.map}</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {GAMEMODE_LABELS[m.gamemode]}
+                  </div>
+                </div>
+                <div className="flex h-4 w-full overflow-hidden rounded bg-secondary/40">
+                  {m.classes.map((c) => (
+                    <div
+                      key={c.classNum}
+                      className="h-full"
+                      style={{
+                        width: `${c.share * 100}%`,
+                        backgroundColor: classColor(c.classNum),
+                      }}
+                      title={`${CLASS_NAMES[c.classNum] ?? c.classNum}: ${fmtDuration(c.seconds)} (${(c.share * 100).toFixed(0)}%)`}
+                    />
+                  ))}
+                </div>
+                <div className="text-right text-[11px] tabular-nums text-muted-foreground">
+                  {fmtDuration(m.totalSeconds)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {!isLoading && maps.length === 0 && (
+        <div className="rounded-lg border bg-card/50 p-4 text-sm text-muted-foreground">
+          No attributed map playtime yet — this needs high-confidence player attributions and
+          consecutive stat snapshots that fall on a single map. It accrues as the sampler and
+          crawler run.
+        </div>
+      )}
+    </section>
+  );
+}
+
 function MatchesPage() {
   const search = Route.useSearch();
   const { data: segments } = useSuspenseQuery(recentSegmentsQueryOptions());
   const { data: leaders } = useSuspenseQuery(matchLeaderboardQueryOptions(search));
   const [openSegment, setOpenSegment] = useState<string | null>(null);
+
+  const segmentIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const seg of segments) s.add(seg.segmentId);
+    for (const l of leaders) s.add(l.segmentId);
+    return [...s];
+  }, [segments, leaders]);
+  const { data: attrList } = useQuery(attributionsForSegmentsQueryOptions(segmentIds));
+  const attr: AttrMap = useMemo(() => {
+    const m: AttrMap = new Map();
+    for (const a of attrList ?? []) m.set(attrKey(a.segmentId, a.name), a);
+    return m;
+  }, [attrList]);
 
   return (
     <div className="space-y-8">
@@ -502,6 +647,8 @@ function MatchesPage() {
       <CasualSnapshot segments={segments} leaders={leaders} />
 
       <MatchDurationsSection />
+
+      <MapClassSection />
 
       <section className="space-y-3">
         <h2 className="font-heading text-lg font-semibold">Fastest observed scorers</h2>
@@ -553,7 +700,12 @@ function MatchesPage() {
           </TableHeader>
           <TableBody>
             {leaders.map((row, i) => (
-              <LeaderRows key={`${row.segmentId}:${row.name}`} row={row} rank={i + 1} />
+              <LeaderRows
+                key={`${row.segmentId}:${row.name}`}
+                row={row}
+                rank={i + 1}
+                attribution={attr.get(attrKey(row.segmentId, row.name))}
+              />
             ))}
             {leaders.length === 0 && (
               <TableRow>
@@ -595,6 +747,7 @@ function MatchesPage() {
                   rounds={seg.rounds}
                   isOpen={isOpen}
                   onToggle={() => setOpenSegment(isOpen ? null : seg.segmentId)}
+                  attr={attr}
                 />
               );
             })}
@@ -613,7 +766,15 @@ function MatchesPage() {
 }
 
 /** One leaderboard row; clicking the name expands its profile candidates. */
-function LeaderRows({ row, rank }: { row: LeaderRow; rank: number }) {
+function LeaderRows({
+  row,
+  rank,
+  attribution,
+}: {
+  row: LeaderRow;
+  rank: number;
+  attribution: SegmentAttribution | undefined;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -621,6 +782,7 @@ function LeaderRows({ row, rank }: { row: LeaderRow; rank: number }) {
         <TableCell className="py-1 text-right font-mono text-muted-foreground">{rank}</TableCell>
         <TableCell className="overflow-hidden py-1 text-ellipsis">
           <MatchableName name={row.name} open={open} onToggle={() => setOpen((o) => !o)} />
+          {attribution && <AttributedLink a={attribution} />}
         </TableCell>
         <TableCell className="overflow-hidden py-1 font-mono text-xs text-ellipsis text-muted-foreground">
           {row.map}
@@ -659,6 +821,7 @@ function SegmentRows({
   rounds,
   isOpen,
   onToggle,
+  attr,
 }: {
   segmentId: string;
   map: string;
@@ -669,6 +832,7 @@ function SegmentRows({
   rounds: number;
   isOpen: boolean;
   onToggle: () => void;
+  attr: AttrMap;
 }) {
   return (
     <>
@@ -696,7 +860,7 @@ function SegmentRows({
       {isOpen && (
         <TableRow className="hover:bg-transparent">
           <TableCell colSpan={7} className="bg-secondary/20 p-0">
-            <SegmentDetail segmentId={segmentId} />
+            <SegmentDetail segmentId={segmentId} attr={attr} />
           </TableCell>
         </TableRow>
       )}
@@ -704,7 +868,7 @@ function SegmentRows({
   );
 }
 
-function SegmentDetail({ segmentId }: { segmentId: string }) {
+function SegmentDetail({ segmentId, attr }: { segmentId: string; attr: AttrMap }) {
   const { data, isLoading } = useQuery(segmentQueryOptions(segmentId));
   if (isLoading) {
     return <div className="px-4 py-3 font-mono text-xs text-muted-foreground">loading…</div>;
@@ -732,7 +896,13 @@ function SegmentDetail({ segmentId }: { segmentId: string }) {
         </TableHeader>
         <TableBody>
           {data.participants.map((p, i) => (
-            <ParticipantRow key={p.name} p={p} rank={i + 1} segmentId={segmentId} />
+            <ParticipantRow
+              key={p.name}
+              p={p}
+              rank={i + 1}
+              segmentId={segmentId}
+              attribution={attr.get(attrKey(segmentId, p.name))}
+            />
           ))}
         </TableBody>
       </Table>
@@ -744,10 +914,12 @@ function ParticipantRow({
   p,
   rank,
   segmentId,
+  attribution,
 }: {
   p: Participant;
   rank: number;
   segmentId: string;
+  attribution: SegmentAttribution | undefined;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -756,6 +928,7 @@ function ParticipantRow({
         <TableCell className="py-0.5 text-right font-mono text-muted-foreground">{rank}</TableCell>
         <TableCell className="overflow-hidden py-0.5 text-ellipsis">
           <MatchableName name={p.name} open={open} onToggle={() => setOpen((o) => !o)} />
+          {attribution && <AttributedLink a={attribution} />}
         </TableCell>
         <TableCell className="py-0.5 text-right font-mono text-sm tabular-nums">
           {fmtPph(p.pointsPerHour)}
