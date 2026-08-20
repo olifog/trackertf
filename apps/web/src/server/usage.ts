@@ -262,11 +262,35 @@ export const fetchUsage = createServerFn({ method: "GET" })
     if (data.xp) return fetchUsageXp(data);
 
     const { offset, ...filters } = data;
-    // over-fetch by one row to learn whether another page exists
+    // over-fetch by one row to learn whether another page exists. The LIMIT is
+    // pushed BELOW the item_schema join: rank/slice the (small, single-slice)
+    // usage_stats rows first, then resolve display fields for just those ~101
+    // defindexes via the item_schema PK. The old leftJoin hashed all ~11.5k
+    // item_schema rows before the limit; ordering here is byte-identical
+    // (usage desc, defindex desc). The variants query below still uses
+    // selectUsage — its onlyGrouped filter reads the joined item_schema.
     const page = (
-      await selectUsage(getDb(), filters, filters.merge)
-        .limit(PAGE_SIZE + 1)
-        .offset(offset)
+      (await getDb().execute(sql`
+        with top as (
+          select defindex, usage, count, sample_size, computed_at
+          from usage_stats
+          where class_num = ${filters.class}
+            and slot = ${filters.slot}
+            and active_minutes_2wk = ${filters.active}
+            and minutes_threshold = ${filters.minutes}
+            and merge_reskins = ${filters.merge}
+          order by usage desc, defindex desc
+          limit ${PAGE_SIZE + 1} offset ${offset}
+        )
+        select t.defindex as defindex, t.usage as usage, t.count as count,
+          t.sample_size as "sampleSize", t.computed_at as "computedAt",
+          i.name as name, i.item_name as "itemName", i.image_url as "imageUrl",
+          i.reskin_group as "reskinGroup", i.slot as "slotName",
+          i.used_by_classes as "usedByClasses"
+        from top t
+        left join item_schema i on i.defindex = t.defindex
+        order by t.usage desc, t.defindex desc
+      `)) as unknown as UsageDbRow[]
     ).map(toIso);
     const rows = page.slice(0, PAGE_SIZE);
     // merge view: also ship per-variant rows so groups can expand in place

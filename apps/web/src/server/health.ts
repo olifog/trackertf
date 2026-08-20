@@ -67,81 +67,105 @@ export interface HealthResponse {
 export const fetchHealth = createServerFn({ method: "GET" }).handler(
   async (): Promise<HealthResponse> => {
     const db = getDb();
-    const api = (await db.execute(sql`
-      select endpoint, outcome, sum(count)::int count
-      from api_metrics where hour > now() - interval '48 hours'
-      group by endpoint, outcome order by endpoint, count desc
-    `)) as unknown as EndpointHealth[];
 
-    const [crawl] = (await db.execute(sql`
-      select
-        count(*)::int players,
-        count(*) filter (where items_status = 'ok')::int items_ok,
-        count(*) filter (where items_status = 'private')::int items_private,
-        count(*) filter (where stats_status = 'ok')::int stats_ok,
-        count(*) filter (where items_status = 'error')::int errors,
-        (select count(*) from crawl_frontier)::int frontier,
-        count(*) filter (where last_crawled > now() - interval '1 hour')::int crawled_last_hour
-      from players
-    `)) as unknown as [Record<string, number>];
+    // Every Postgres query on this dashboard is independent — run them
+    // concurrently instead of in a ~7-deep await waterfall. crawl and corpus
+    // were two full scans of players (52k rows); they're merged into one pass
+    // here (same table, both plain single-row aggregates). The old
+    // crawl_frontier count(*) subquery is dropped too: the frontier total equals
+    // the sum of the per-source counts we already fetch for the queue breakdown.
+    const [api, playersAgg, queueRaw, countryRaw, classRaw, analyserRow, ccuRaw] = (await Promise.all([
+      db.execute(sql`
+        select endpoint, outcome, sum(count)::int count
+        from api_metrics where hour > now() - interval '48 hours'
+        group by endpoint, outcome order by endpoint, count desc
+      `),
+      // Merged crawl + corpus pass over players. country_known counts
+      // POP-filtered profiles that expose a country (the country-chart base).
+      db.execute(sql`
+        select
+          count(*)::int players,
+          count(*) filter (where items_status = 'ok')::int items_ok,
+          count(*) filter (where items_status = 'private')::int items_private,
+          count(*) filter (where stats_status = 'ok')::int stats_ok,
+          count(*) filter (where items_status = 'error')::int errors,
+          count(*) filter (where last_crawled > now() - interval '1 hour')::int crawled_last_hour,
+          count(*) filter (where tf2_minutes_2wk > 0)::int active,
+          coalesce(sum(tf2_minutes), 0)::bigint minutes,
+          count(*) filter (
+            where loccountrycode is not null and personaname is not null
+              and vac_banned = false and coalesce(botness, 0) < 0.5
+          )::int country_known
+        from players
+      `),
+      // Frontier composition — what's queued to crawl, by source, and how stale.
+      db.execute(sql`
+        select source, count(*)::int n, min(enqueued_at) oldest
+        from crawl_frontier
+        group by source
+        order by n desc
+      `),
+      // Country distribution across the POP-filtered corpus (same bot/ban filter
+      // the leaderboards use), top 24 by player count.
+      db.execute(sql`
+        select loccountrycode cc, count(*)::int n
+        from players
+        where loccountrycode is not null and personaname is not null
+          and vac_banned = false and coalesce(botness, 0) < 0.5
+        group by loccountrycode
+        order by n desc
+        limit 24
+      `),
+      // Per-class lifetime accumulators — "which classes get played".
+      db.execute(sql`
+        select class_num,
+          coalesce(sum(playtime_seconds), 0)::bigint secs,
+          coalesce(sum(kills), 0)::bigint kills,
+          count(*)::int players
+        from player_class_stats
+        group by class_num
+        order by class_num
+      `),
+      db.execute(sql`select max(computed_at) t from usage_stats`),
+      // Playerbase: live CCU + 14d peak from population_snapshots (empty until
+      // the scanner ships this).
+      db.execute(sql`
+        select
+          (select current_players from population_snapshots
+            order by scanned_at desc limit 1) as live,
+          (select max(current_players)::int from population_snapshots
+            where scanned_at > now() - interval '14 days') as peak
+      `),
+    ])) as unknown as [
+      EndpointHealth[],
+      [Record<string, unknown> | undefined],
+      Record<string, unknown>[],
+      Record<string, unknown>[],
+      Record<string, unknown>[],
+      [{ t: string | Date | null } | undefined],
+      [Record<string, unknown> | undefined],
+    ];
+    const ccu = ccuRaw[0];
 
-    // Corpus totals — the playerbase we track, active in the last 2 weeks, and
-    // the summed lifetime TF2 playtime across every crawled profile. country_known
-    // counts POP-filtered profiles that expose a country (the country-chart base).
-    const [corpus] = (await db.execute(sql`
-      select count(*)::int total,
-        count(*) filter (where tf2_minutes_2wk > 0)::int active,
-        coalesce(sum(tf2_minutes), 0)::bigint minutes,
-        count(*) filter (
-          where loccountrycode is not null and personaname is not null
-            and vac_banned = false and coalesce(botness, 0) < 0.5
-        )::int country_known
-      from players
-    `)) as unknown as [Record<string, unknown> | undefined];
+    const crawl = playersAgg[0] as Record<string, number> | undefined;
+    const corpus = playersAgg[0];
 
-    // Frontier composition — what's queued to crawl, by source, and how stale.
-    const queueRaw = (await db.execute(sql`
-      select source, count(*)::int n, min(enqueued_at) oldest
-      from crawl_frontier
-      group by source
-      order by n desc
-    `)) as unknown as Record<string, unknown>[];
     const bySource = queueRaw.map((r) => ({
       source: String(r["source"]),
       count: num(r["n"]),
     }));
+    const frontier = bySource.reduce((a, s) => a + s.count, 0);
     const oldestEnqueued =
       queueRaw
         .map((r) => (r["oldest"] ? new Date(r["oldest"] as string | Date).toISOString() : null))
         .filter((v): v is string => v !== null)
         .toSorted()[0] ?? null;
 
-    // Country distribution across the POP-filtered corpus (same bot/ban filter
-    // the leaderboards use), top 24 by player count.
-    const countryRaw = (await db.execute(sql`
-      select loccountrycode cc, count(*)::int n
-      from players
-      where loccountrycode is not null and personaname is not null
-        and vac_banned = false and coalesce(botness, 0) < 0.5
-      group by loccountrycode
-      order by n desc
-      limit 24
-    `)) as unknown as Record<string, unknown>[];
     const countries = countryRaw.map((r) => ({
       code: String(r["cc"]),
       count: num(r["n"]),
     }));
 
-    // Per-class lifetime accumulators — "which classes get played".
-    const classRaw = (await db.execute(sql`
-      select class_num,
-        coalesce(sum(playtime_seconds), 0)::bigint secs,
-        coalesce(sum(kills), 0)::bigint kills,
-        count(*)::int players
-      from player_class_stats
-      group by class_num
-      order by class_num
-    `)) as unknown as Record<string, unknown>[];
     const byClass: ClassSlice[] = classRaw.map((r) => ({
       classNum: num(r["class_num"]),
       playtimeHours: Math.round(num(r["secs"]) / 3600),
@@ -149,20 +173,7 @@ export const fetchHealth = createServerFn({ method: "GET" }).handler(
       players: num(r["players"]),
     }));
 
-    const [analyser] = (await db.execute(
-      sql`select max(computed_at) t from usage_stats`,
-    )) as unknown as [{ t: string | Date | null }];
-
-    // Playerbase: live CCU + 14d peak from population_snapshots (empty until the
-    // scanner ships this), and a mark-recapture population estimate from the
-    // sampler's observed names.
-    const [ccu] = (await db.execute(sql`
-      select
-        (select current_players from population_snapshots
-          order by scanned_at desc limit 1) as live,
-        (select max(current_players)::int from population_snapshots
-          where scanned_at > now() - interval '14 days') as peak
-    `)) as unknown as [Record<string, unknown> | undefined];
+    const analyser = analyserRow[0];
 
     // Two-sample Chapman estimator of distinct casual players active over 14d.
     // Splits observed names into two 7-day windows: n1/n2 are the distinct names
@@ -209,7 +220,7 @@ export const fetchHealth = createServerFn({ method: "GET" }).handler(
         itemsPrivate: crawl?.["items_private"] ?? 0,
         statsOk: crawl?.["stats_ok"] ?? 0,
         errors: crawl?.["errors"] ?? 0,
-        frontier: crawl?.["frontier"] ?? 0,
+        frontier,
         crawledLastHour: crawl?.["crawled_last_hour"] ?? 0,
       },
       corpus: {
@@ -218,7 +229,7 @@ export const fetchHealth = createServerFn({ method: "GET" }).handler(
         totalTrackedHours: Math.round(num(corpus?.["minutes"]) / 60),
       },
       queue: {
-        total: bySource.reduce((a, s) => a + s.count, 0),
+        total: frontier,
         oldestEnqueued,
         bySource,
       },

@@ -139,109 +139,117 @@ export const fetchServerOverview = createServerFn({ method: "GET" }).handler(
       };
     }
 
-    // CTE pins the latest scan so the breakdowns can't straddle two scans.
-    const byRegionRaw = (await db.execute(sql`
-      with latest as (select max(scanned_at) t from server_snapshots)
-      select region,
-        sum(players)::int players,
-        sum(server_count)::int servers,
-        coalesce(sum(players) filter (where official), 0)::int official_players,
-        coalesce(sum(server_count) filter (where official), 0)::int official_servers
-      from server_snapshots, latest
-      where scanned_at = latest.t
-      group by region
-      order by players desc
-    `)) as unknown as Record<string, unknown>[];
-
-    const byMapRaw = (await db.execute(sql`
-      with latest as (select max(scanned_at) t from server_snapshots)
-      select map,
-        sum(players)::int players,
-        sum(server_count)::int servers,
-        coalesce(sum(players) filter (where official), 0)::int official_players
-      from server_snapshots, latest
-      where scanned_at = latest.t
-      group by map
-      order by players desc
-      limit 30
-    `)) as unknown as Record<string, unknown>[];
-
-    const byGamemodeRaw = (await db.execute(sql`
-      with latest as (select max(scanned_at) t from server_snapshots)
-      select ${gamemodeExpr} gm,
-        sum(players)::int players,
-        sum(server_count)::int servers
-      from server_snapshots, latest
-      where scanned_at = latest.t
-      group by gm
-      order by players desc
-    `)) as unknown as Record<string, unknown>[];
-
-    // Rush hour: average concurrent players per hour-of-day over the trailing
-    // 7 days, split official vs community. Inner query totals each scan so the
-    // outer average is over scans (concurrent players), not a sum of scans.
-    const rushHourRaw = (await db.execute(sql`
-      select hr,
-        round(avg(off))::int official,
-        round(avg(comm))::int community
-      from (
-        select extract(hour from scanned_at at time zone 'UTC')::int hr,
-          scanned_at,
-          coalesce(sum(players) filter (where official), 0) off,
-          coalesce(sum(players) filter (where not official), 0) comm
-        from server_snapshots
-        where scanned_at > now() - interval '7 days'
-        group by scanned_at
-      ) s
-      group by hr
-      order by hr
-    `)) as unknown as Record<string, unknown>[];
-
-    const [totalsRaw] = (await db.execute(sql`
-      with latest as (select max(scanned_at) t from server_snapshots)
-      select
-        sum(players)::int players,
-        sum(bots)::int bots,
-        sum(server_count)::int servers,
-        coalesce(sum(players) filter (where official), 0)::int official_players,
-        coalesce(sum(server_count) filter (where official), 0)::int official_servers,
-        coalesce(sum(capacity), 0)::int capacity,
-        coalesce(sum(alltalk_servers), 0)::int alltalk,
-        coalesce(sum(nocrits_servers), 0)::int nocrits,
-        coalesce(sum(respawntimes_servers), 0)::int respawntimes,
-        coalesce(sum(maxplayers_servers), 0)::int maxplayers,
-        coalesce(sum(highlander_servers), 0)::int highlander
-      from server_snapshots, latest
-      where scanned_at = latest.t
-    `)) as unknown as [Record<string, unknown> | undefined];
-
-    // Empty community servers: their own table (Valve empties excluded — the
-    // master list truncates to 10k phantom reservations, so no true count).
-    const [emptyRaw] = (await db.execute(sql`
-      with latest as (select max(scanned_at) t from server_empty_snapshots)
-      select coalesce(sum(servers), 0)::int servers
-      from server_empty_snapshots, latest
-      where scanned_at = latest.t
-    `)) as unknown as [Record<string, unknown> | undefined];
-
-    // Community players by continent — only real region codes (0-7). Valve
-    // casual is SDR-hidden (region 255) and cannot be geolocated, so it's
-    // deliberately excluded rather than dumped into a fake "World" bucket.
-    const byContinentRaw = (await db.execute(sql`
-      with latest as (select max(scanned_at) t from server_snapshots)
-      select
-        case region
-          when 0 then 'North America' when 1 then 'North America'
-          when 2 then 'South America' when 3 then 'Europe'
-          when 4 then 'Asia' when 5 then 'Oceania'
-          when 6 then 'Middle East' when 7 then 'Africa'
-        end continent,
-        sum(players)::int players
-      from server_snapshots, latest
-      where scanned_at = latest.t and official = false and region between 0 and 7
-      group by continent
-      order by players desc
-    `)) as unknown as Record<string, unknown>[];
+    // All breakdowns are independent reads of the same pinned latest scan, so
+    // fire them concurrently (postgres.js pools) instead of awaiting in series —
+    // the page's server-side latency was the SUM of ~7 round trips before.
+    // Each query re-pins `latest` via its own CTE so none can straddle scans.
+    const [byRegionRaw, byMapRaw, byGamemodeRaw, rushHourRaw, [totalsRaw], [emptyRaw], byContinentRaw] =
+      (await Promise.all([
+        db.execute(sql`
+          with latest as (select max(scanned_at) t from server_snapshots)
+          select region,
+            sum(players)::int players,
+            sum(server_count)::int servers,
+            coalesce(sum(players) filter (where official), 0)::int official_players,
+            coalesce(sum(server_count) filter (where official), 0)::int official_servers
+          from server_snapshots, latest
+          where scanned_at = latest.t
+          group by region
+          order by players desc
+        `),
+        db.execute(sql`
+          with latest as (select max(scanned_at) t from server_snapshots)
+          select map,
+            sum(players)::int players,
+            sum(server_count)::int servers,
+            coalesce(sum(players) filter (where official), 0)::int official_players
+          from server_snapshots, latest
+          where scanned_at = latest.t
+          group by map
+          order by players desc
+          limit 30
+        `),
+        db.execute(sql`
+          with latest as (select max(scanned_at) t from server_snapshots)
+          select ${gamemodeExpr} gm,
+            sum(players)::int players,
+            sum(server_count)::int servers
+          from server_snapshots, latest
+          where scanned_at = latest.t
+          group by gm
+          order by players desc
+        `),
+        // Rush hour: average concurrent players per hour-of-day over the trailing
+        // 7 days, split official vs community. Inner query totals each scan so the
+        // outer average is over scans (concurrent players), not a sum of scans.
+        db.execute(sql`
+          select hr,
+            round(avg(off))::int official,
+            round(avg(comm))::int community
+          from (
+            select extract(hour from scanned_at at time zone 'UTC')::int hr,
+              scanned_at,
+              coalesce(sum(players) filter (where official), 0) off,
+              coalesce(sum(players) filter (where not official), 0) comm
+            from server_snapshots
+            where scanned_at > now() - interval '7 days'
+            group by scanned_at
+          ) s
+          group by hr
+          order by hr
+        `),
+        db.execute(sql`
+          with latest as (select max(scanned_at) t from server_snapshots)
+          select
+            sum(players)::int players,
+            sum(bots)::int bots,
+            sum(server_count)::int servers,
+            coalesce(sum(players) filter (where official), 0)::int official_players,
+            coalesce(sum(server_count) filter (where official), 0)::int official_servers,
+            coalesce(sum(capacity), 0)::int capacity,
+            coalesce(sum(alltalk_servers), 0)::int alltalk,
+            coalesce(sum(nocrits_servers), 0)::int nocrits,
+            coalesce(sum(respawntimes_servers), 0)::int respawntimes,
+            coalesce(sum(maxplayers_servers), 0)::int maxplayers,
+            coalesce(sum(highlander_servers), 0)::int highlander
+          from server_snapshots, latest
+          where scanned_at = latest.t
+        `),
+        // Empty community servers: their own table (Valve empties excluded — the
+        // master list truncates to 10k phantom reservations, so no true count).
+        db.execute(sql`
+          with latest as (select max(scanned_at) t from server_empty_snapshots)
+          select coalesce(sum(servers), 0)::int servers
+          from server_empty_snapshots, latest
+          where scanned_at = latest.t
+        `),
+        // Community players by continent — only real region codes (0-7). Valve
+        // casual is SDR-hidden (region 255) and cannot be geolocated, so it's
+        // deliberately excluded rather than dumped into a fake "World" bucket.
+        db.execute(sql`
+          with latest as (select max(scanned_at) t from server_snapshots)
+          select
+            case region
+              when 0 then 'North America' when 1 then 'North America'
+              when 2 then 'South America' when 3 then 'Europe'
+              when 4 then 'Asia' when 5 then 'Oceania'
+              when 6 then 'Middle East' when 7 then 'Africa'
+            end continent,
+            sum(players)::int players
+          from server_snapshots, latest
+          where scanned_at = latest.t and official = false and region between 0 and 7
+          group by continent
+          order by players desc
+        `),
+      ])) as unknown as [
+        Record<string, unknown>[],
+        Record<string, unknown>[],
+        Record<string, unknown>[],
+        Record<string, unknown>[],
+        [Record<string, unknown> | undefined],
+        [Record<string, unknown> | undefined],
+        Record<string, unknown>[],
+      ];
 
     const tags: TagStat[] = [
       { key: "alltalk", count: num(totalsRaw?.["alltalk"]) },
