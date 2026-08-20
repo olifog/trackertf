@@ -10,8 +10,9 @@ import {
   TableRow,
 } from "#/components/ui/table";
 import { qualityColor, qualityName, qualityRank } from "#/lib/quality";
-import { CLASS_NAMES, itemDisplayName } from "#/lib/tf2";
+import { avatarUrl, CLASS_NAMES, itemDisplayName } from "#/lib/tf2";
 import { itemPairsQueryOptions, itemQueryOptions } from "#/server/item";
+import { HALE_OWN_KILLS, itemStrangeBoardQueryOptions } from "#/server/leaderboards";
 
 export const Route = createFileRoute("/item/$defindex")({
   params: {
@@ -184,6 +185,8 @@ function ItemPage() {
         </div>
       )}
 
+      <StrangeLeaderboard defindex={item.defindex} />
+
       {groupMembers.length > 1 && (
         <div>
           <h2 className="mb-2 font-heading text-lg font-semibold">
@@ -230,6 +233,83 @@ function ItemPage() {
       )}
 
       <PairedWeapons defindex={item.defindex} />
+    </div>
+  );
+}
+
+/**
+ * Top players by Strange kill-eater count on this specific defindex. Rendered
+ * only when the item actually has Strange (quality 11) equippers, so it stays
+ * hidden for items that are never run Strange. Mirrors the leaderboards-page
+ * table style; the Hale's Own threshold (25,000) is flagged inline.
+ */
+function StrangeLeaderboard({ defindex }: { defindex: number }) {
+  const { data } = useQuery(itemStrangeBoardQueryOptions(defindex));
+  if (!data || data.length === 0) return null;
+
+  return (
+    <div>
+      <h2 className="mb-2 font-heading text-lg font-semibold">
+        Top Strange kills{" "}
+        <span className="text-sm font-normal text-muted-foreground">
+          (highest kill-eater counters on this item; public profiles, no VAC bans)
+        </span>
+      </h2>
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="w-10 text-right">#</TableHead>
+            <TableHead className="w-9" />
+            <TableHead>Player</TableHead>
+            <TableHead className="w-40 text-right">Strange kills</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {data.map((row) => {
+            const haleOwn = row.kills >= HALE_OWN_KILLS;
+            return (
+              <TableRow key={row.steamid} className="h-9">
+                <TableCell className="py-1 text-right font-mono text-muted-foreground">
+                  {row.rank}
+                </TableCell>
+                <TableCell className="py-0.5">
+                  {avatarUrl(row.avatarHash) && (
+                    <img
+                      src={avatarUrl(row.avatarHash) as string}
+                      alt=""
+                      className="h-6 w-6 rounded-sm"
+                      loading="lazy"
+                    />
+                  )}
+                </TableCell>
+                <TableCell className="py-1">
+                  <Link
+                    to="/player/$steamid"
+                    params={{ steamid: row.steamid }}
+                    className="hover:underline"
+                  >
+                    {row.personaname ?? row.steamid}
+                  </Link>
+                </TableCell>
+                <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+                  <span className="inline-flex items-center justify-end gap-1.5">
+                    {haleOwn && (
+                      <span
+                        title="Hale's Own (25,000+ kills)"
+                        className="rounded border px-1 py-0.5 text-[10px] font-medium tracking-wide uppercase"
+                        style={{ color: qualityColor(11), borderColor: qualityColor(11) }}
+                      >
+                        Hale's Own
+                      </span>
+                    )}
+                    {row.kills.toLocaleString()}
+                  </span>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
     </div>
   );
 }

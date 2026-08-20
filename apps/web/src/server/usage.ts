@@ -211,15 +211,29 @@ export interface UsageDeltaResponse {
   deltas: UsageDelta[];
 }
 
+/** selectable comparison windows for the delta view (whole days) */
+export const DELTA_PERIODS = [7, 30] as const;
+export type DeltaPeriod = (typeof DELTA_PERIODS)[number];
+
 /**
- * Week-over-week deltas for the default headline view only (Any class · Any
- * slot · all players · merged). usage_stats_history stores just that slice, so
- * defindex here is the reskin group id. Compares the newest snapshot against
- * the newest snapshot at least 7 days older; if <7 days of history exist yet,
- * falls back to the earliest snapshot and reports the real span in `days`.
+ * Usage deltas for the default headline view only (Any class · Any slot · all
+ * players · merged). usage_stats_history stores just that slice, so defindex
+ * here is the reskin group id. Compares the newest snapshot against the newest
+ * snapshot at least `period` days older; if that much history doesn't exist
+ * yet, falls back to the earliest snapshot and reports the real span in `days`.
  */
-export const fetchUsageDeltas = createServerFn({ method: "GET" }).handler(
-  async (): Promise<UsageDeltaResponse> => {
+export const fetchUsageDeltas = createServerFn({ method: "GET" })
+  .validator(
+    z.object({
+      period: z
+        .number()
+        .int()
+        .catch(7)
+        .default(7)
+        .transform((p) => (DELTA_PERIODS.includes(p as DeltaPeriod) ? (p as DeltaPeriod) : 7)),
+    }),
+  )
+  .handler(async ({ data }): Promise<UsageDeltaResponse> => {
     const database = getDb();
     const [bounds] = (await database.execute(sql`
       select max(day)::text latest, min(day)::text earliest from usage_stats_history
@@ -230,7 +244,7 @@ export const fetchUsageDeltas = createServerFn({ method: "GET" }).handler(
       return { enoughHistory: false, latestDay: latest, comparisonDay: null, days: 0, deltas: [] };
     }
     const [cmp] = (await database.execute(sql`
-      select max(day)::text d from usage_stats_history where day <= ${latest}::date - 7
+      select max(day)::text d from usage_stats_history where day <= ${latest}::date - ${data.period}
     `)) as unknown as [{ d: string | null } | undefined];
     const comparisonDay = cmp?.d ?? earliest;
     const enoughHistory = comparisonDay !== latest;
@@ -280,8 +294,10 @@ export const fetchUsageDeltas = createServerFn({ method: "GET" }).handler(
         sampleSizeThen: Number(r.n_then),
       })),
     };
-  },
-);
+  });
 
-export const usageDeltasQueryOptions = () =>
-  queryOptions({ queryKey: ["usageDeltas"], queryFn: () => fetchUsageDeltas() });
+export const usageDeltasQueryOptions = (period: DeltaPeriod = 7) =>
+  queryOptions({
+    queryKey: ["usageDeltas", period],
+    queryFn: () => fetchUsageDeltas({ data: { period } }),
+  });

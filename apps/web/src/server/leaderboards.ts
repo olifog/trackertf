@@ -41,7 +41,7 @@ export const STRANGE_BOARD_KEYS = ["strange:total", "strange:max", "strange:hale
 
 /** kills for a Strange item to reach the top "Hale's Own" rank (mirror of
  * HALE_OWN_KILLS in tf2-schema strange.ts / the player-page inline copy) */
-const HALE_OWN_KILLS = 25000;
+export const HALE_OWN_KILLS = 25000;
 export type StrangeBoardKey = (typeof STRANGE_BOARD_KEYS)[number];
 const STRANGE_KEY_SET: ReadonlySet<string> = new Set(STRANGE_BOARD_KEYS);
 export const isStrangeBoard = (key: string): key is StrangeBoardKey => STRANGE_KEY_SET.has(key);
@@ -254,4 +254,56 @@ export const playerRanksQueryOptions = (steamid: string) =>
   queryOptions({
     queryKey: ["playerRanks", steamid],
     queryFn: () => fetchPlayerRanks({ data: { steamid } }),
+  });
+
+export interface ItemStrangeRow {
+  rank: number;
+  steamid: string;
+  personaname: string | null;
+  avatarHash: string | null;
+  /** highest Strange counter this player is displaying on the item */
+  kills: number;
+}
+
+const ITEM_STRANGE_LIMIT = 20;
+
+/**
+ * Per-item Strange kill-eater leaderboard: the top players by kills on their
+ * Strange (quality 11) copy of one specific defindex. Unlike the site-wide
+ * strange boards this reads Postgres `equipped_items` directly (steamid,
+ * defindex, quality, strange_kills) and joins `players` in the same pass —
+ * a defindex is far narrower than the whole Strange corpus, so no CH→PG
+ * over-fetch is needed. Applies the standard population filter (public
+ * persona, no VAC ban, botness < 0.5) that boards.ts uses everywhere, and
+ * collapses a player who runs the item on multiple classes to their single
+ * highest counter via max().
+ */
+export const fetchItemStrangeBoard = createServerFn({ method: "GET" })
+  .validator(z.object({ defindex: z.number().int().nonnegative() }))
+  .handler(async ({ data }): Promise<ItemStrangeRow[]> => {
+    const db = getDb();
+    const rows = (await db.execute(sql`
+      select e.steamid, max(e.strange_kills) as kills, p.personaname, p.avatar_hash
+      from equipped_items e
+      join players p using (steamid)
+      where e.defindex = ${data.defindex} and e.quality = 11 and e.strange_kills > 0
+        and p.personaname is not null and p.vac_banned = false
+        and coalesce(p.botness, 0) < 0.5
+      group by e.steamid, p.personaname, p.avatar_hash
+      order by kills desc, e.steamid
+      limit ${ITEM_STRANGE_LIMIT}
+    `)) as unknown as Record<string, unknown>[];
+    return rows.map((r, i) => ({
+      rank: i + 1,
+      steamid: r["steamid"] as string,
+      personaname: r["personaname"] as string | null,
+      avatarHash: r["avatar_hash"] as string | null,
+      kills: Number(r["kills"]),
+    }));
+  });
+
+export const itemStrangeBoardQueryOptions = (defindex: number) =>
+  queryOptions({
+    queryKey: ["itemStrangeBoard", defindex],
+    queryFn: () => fetchItemStrangeBoard({ data: { defindex } }),
   });

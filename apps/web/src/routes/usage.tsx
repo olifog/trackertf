@@ -15,6 +15,8 @@ import {
 import { qualityColor } from "#/lib/quality";
 import { formatPValue, twoProportionZTest } from "#/lib/stats";
 import {
+  DELTA_PERIODS,
+  type DeltaPeriod,
   type StrangeShare,
   strangeSharesQueryOptions,
   type UsageDelta,
@@ -289,6 +291,7 @@ function UsagePage() {
   // Display overlays (local, not URL): they don't change the usage query.
   const [strange, setStrange] = useState(false);
   const [compare, setCompare] = useState(false);
+  const [comparePeriod, setComparePeriod] = useState<DeltaPeriod>(7);
 
   // Deltas are only tracked for the default headline view.
   const isHeadline =
@@ -306,7 +309,7 @@ function UsagePage() {
   }, [strangeQuery.data]);
 
   const deltaQuery = useQuery({
-    ...usageDeltasQueryOptions(),
+    ...usageDeltasQueryOptions(comparePeriod),
     enabled: compare && isHeadline,
   });
   const deltaByDef = useMemo(() => {
@@ -452,7 +455,25 @@ function UsagePage() {
             patch={(next) => ({ pdas: !next })}
           />
           <LocalSwitch label="Strange share" checked={strange} onChange={setStrange} />
-          <LocalSwitch label="Compare (7d)" checked={compare} onChange={setCompare} />
+          <LocalSwitch label="Compare usage" checked={compare} onChange={setCompare} />
+          {compare && (
+            <div className="inline-flex divide-x divide-border overflow-hidden rounded-md border">
+              {DELTA_PERIODS.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setComparePeriod(p)}
+                  className={`flex h-7 items-center px-2 font-mono text-[11px] leading-none transition-colors ${
+                    comparePeriod === p
+                      ? "bg-primary font-medium text-primary-foreground"
+                      : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
+                  }`}
+                >
+                  {p}d
+                </button>
+              ))}
+            </div>
+          )}
         </FilterRow>
       </div>
 
@@ -526,7 +547,9 @@ function UsagePage() {
                     showClasses={search.class === -1}
                     showSlot={search.slot === -1}
                     showStrange={strange}
-                    strange={strange ? strangeByGid.get(item.reskinGroup ?? item.defindex) : undefined}
+                    strange={
+                      strange ? strangeByGid.get(item.reskinGroup ?? item.defindex) : undefined
+                    }
                     delta={compare && isHeadline ? deltaByDef.get(item.defindex) : undefined}
                   />
                 );
