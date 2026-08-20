@@ -74,6 +74,26 @@ export const fetchPlayerSightings = createServerFn({ method: "GET" })
     const norm = normalizeName(p.personaname);
     if (norm.length === 0) return EMPTY;
 
+    // Sightings are a decorative, best-effort section: they lean on ClickHouse
+    // (`match_obs`) and a heavier corroboration query. A failure here (a CH blip,
+    // a query regression) must NEVER take down the whole player page — this fn is
+    // one of six the loader awaits in a Promise.all, so a throw rejects the lot.
+    // A screenshotted prod crash on /player/$steamid traced back to exactly this
+    // (a CH bug in the sightings query), so we fail soft to an empty result.
+    try {
+      return await resolveSightings(db, data.steamid, norm);
+    } catch (err) {
+      console.error(`fetchPlayerSightings failed for ${data.steamid}:`, err);
+      return { hasName: true, sightings: [], scanned: 0, ambiguous: 0 };
+    }
+  });
+
+async function resolveSightings(
+  db: ReturnType<typeof getDb>,
+  steamid: string,
+  norm: string,
+): Promise<PlayerSightings> {
+  {
     // Candidate segments: recent sampler segments whose (normalized) observed
     // name equals this player's persona. Normalization mirrors normalizeName —
     // strip zero-width, collapse whitespace, lower, trim (RE2 in that order).
@@ -149,7 +169,7 @@ export const fetchPlayerSightings = createServerFn({ method: "GET" })
           and next_at is not null and next_min > tf2_minutes
       )
       select seg.segment_id,
-        bool_or(i.steamid = ${data.steamid}) as me,
+        bool_or(i.steamid = ${steamid}) as me,
         count(distinct i.steamid)::int as players
       from segs seg
       left join intervals i
@@ -183,7 +203,8 @@ export const fetchPlayerSightings = createServerFn({ method: "GET" })
     }
 
     return { hasName: true, sightings, scanned: cands.length, ambiguous };
-  });
+  }
+}
 
 export const playerSightingsQueryOptions = (steamid: string) =>
   queryOptions({
