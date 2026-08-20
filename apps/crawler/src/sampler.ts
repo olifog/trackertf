@@ -290,7 +290,9 @@ async function round(): Promise<void> {
 
   let closed = 0;
   let observed = 0;
-  // snapshot keys: the loop mutates `tracked` (drops + boundary re-opens)
+  // snapshot keys: the loop mutates `tracked` (drops + boundary re-opens), so
+  // iterating the live view would be unsafe — the spread is deliberate.
+  // eslint-disable-next-line unicorn/no-useless-spread
   for (const steamid of [...tracked.keys()]) {
     const current = byId.get(steamid);
     let seg = tracked.get(steamid);
