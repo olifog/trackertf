@@ -325,6 +325,12 @@ export const matchSegments = pgTable(
     endedAt: timestamp({ withTimezone: true }).notNull(),
     /** number of successful player-query rounds folded into this segment */
     observations: smallint().notNull(),
+    /** why the segment stopped, set when the sampler closes it:
+     * 'score_reset' (scoreboard reset = new match on the same server) and
+     * 'map_change' are true match boundaries → segment span is a real match
+     * length. 'server_gone' (server emptied/vanished) is ambiguous/truncated.
+     * NULL = still open or closed by process restart. */
+    reasonClosed: text("reason_closed"),
   },
   (t) => [index("match_segments_started_at_idx").on(t.startedAt)],
 );

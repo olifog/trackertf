@@ -1,0 +1,1 @@
+ALTER TABLE "match_segments" ADD COLUMN "reason_closed" text;
