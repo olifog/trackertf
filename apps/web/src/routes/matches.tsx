@@ -1,16 +1,7 @@
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "#/components/ui/card";
 import { FilterRow, Segmented } from "#/components/ui/filter-bar";
 import {
@@ -30,6 +21,8 @@ import {
   TableRow,
 } from "#/components/ui/table";
 import { avatarUrl } from "#/lib/tf2";
+import { type DurationRow, matchDurationsQueryOptions } from "#/server/matchDurations";
+import type { GamemodeKey } from "#/server/servers";
 import {
   matchLeaderboardQueryOptions,
   type LeaderRow,
@@ -146,9 +139,7 @@ const regionConfig = { players: { label: "Players" } } satisfies ChartConfig;
 function countryFlag(code: string | null): string {
   if (!code || !/^[a-zA-Z]{2}$/.test(code)) return "";
   const base = 0x1f1e6;
-  return String.fromCodePoint(
-    ...[...code.toUpperCase()].map((c) => base + c.charCodeAt(0) - 65),
-  );
+  return String.fromCodePoint(...[...code.toUpperCase()].map((c) => base + c.charCodeAt(0) - 65));
 }
 
 function fmtHours2wk(min: number | null): string {
@@ -228,8 +219,8 @@ function CandidatePanel({ segmentId, name }: { segmentId: string; name: string }
   if (!data || data.candidates.length === 0) {
     return (
       <div className="px-4 py-3 text-xs text-muted-foreground">
-        No profile candidates — this display name isn't in the crawled corpus (or is too generic
-        to match).
+        No profile candidates — this display name isn't in the crawled corpus (or is too generic to
+        match).
       </div>
     );
   }
@@ -348,9 +339,18 @@ function CasualSnapshot({ segments, leaders }: { segments: SegmentRow[]; leaders
           <ChartContainer config={regionConfig} className="mx-auto aspect-square h-[240px]">
             <PieChart>
               <ChartTooltip content={<ChartTooltipContent nameKey="region" hideLabel />} />
-              <Pie data={byRegion} dataKey="players" nameKey="region" innerRadius={50} strokeWidth={2}>
+              <Pie
+                data={byRegion}
+                dataKey="players"
+                nameKey="region"
+                innerRadius={50}
+                strokeWidth={2}
+              >
                 {byRegion.map((slice, i) => (
-                  <Cell key={slice.region} fill={REGION_COLORS[i % REGION_COLORS.length] ?? "var(--chart-1)"} />
+                  <Cell
+                    key={slice.region}
+                    fill={REGION_COLORS[i % REGION_COLORS.length] ?? "var(--chart-1)"}
+                  />
                 ))}
               </Pie>
               <ChartLegend content={<ChartLegendContent nameKey="region" />} />
@@ -367,7 +367,13 @@ function CasualSnapshot({ segments, leaders }: { segments: SegmentRow[]; leaders
           <ChartContainer config={histConfig} className="aspect-auto h-[240px] w-full">
             <BarChart data={hist} margin={{ left: 4, right: 8, top: 8 }}>
               <CartesianGrid vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} tick={{ fontSize: 11 }} />
+              <XAxis
+                dataKey="label"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                tick={{ fontSize: 11 }}
+              />
               <YAxis tickLine={false} axisLine={false} width={32} allowDecimals={false} />
               <ChartTooltip content={<ChartTooltipContent />} />
               <Bar dataKey="players" fill="var(--color-players)" radius={[3, 3, 0, 0]} />
@@ -376,6 +382,99 @@ function CasualSnapshot({ segments, leaders }: { segments: SegmentRow[]; leaders
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+const GAMEMODE_LABELS: Record<GamemodeKey, string> = {
+  payload: "Payload",
+  cp: "Control Point",
+  koth: "King of the Hill",
+  ctf: "Capture the Flag",
+  mvm: "Mann vs. Machine",
+  pd: "Player Destruction",
+  other: "Other",
+};
+
+/**
+ * Median casual match length by gamemode and map, from completed segments the
+ * sampler witnessed start-to-finish (see server/matchDurations.ts). Lazy,
+ * non-blocking, and degrades to an empty state while the sampler accrues
+ * enough both-ends-witnessed matches.
+ */
+function MatchDurationsSection() {
+  const { data, isLoading } = useQuery(matchDurationsQueryOptions());
+  const byGamemode = data?.byGamemode ?? [];
+  const byMap = data?.byMap ?? [];
+
+  return (
+    <section className="space-y-3">
+      <h2 className="font-heading text-lg font-semibold">How long matches take</h2>
+      <p className="max-w-3xl text-sm text-muted-foreground">
+        Median match length, measured from segments the sampler saw both the start and end of — a
+        match that reset the scoreboard or rolled the map, flowing straight out of the previous one.
+        Truncated segments (we started mid-match, or the server emptied) are excluded, so these are
+        real match durations, not sampling artifacts.
+      </p>
+
+      {byGamemode.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {byGamemode.map((g) => (
+            <div key={g.gamemode} className="rounded-lg border bg-card/50 p-3">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                {GAMEMODE_LABELS[g.gamemode]}
+              </div>
+              <div className="mt-1 font-heading text-xl font-bold tabular-nums">
+                {fmtDuration(g.medianSec)}
+              </div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+                {fmtDuration(g.p25Sec)}–{fmtDuration(g.p75Sec)} · {g.matches.toLocaleString()}{" "}
+                {g.matches === 1 ? "match" : "matches"}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {byMap.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead>Map</TableHead>
+              <TableHead className="w-40">Mode</TableHead>
+              <TableHead className="w-24 text-right">Median</TableHead>
+              <TableHead className="w-32 text-right">Typical range</TableHead>
+              <TableHead className="w-24 text-right">Matches</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {byMap.map((m: DurationRow) => (
+              <TableRow key={m.map}>
+                <TableCell className="font-mono text-xs">{m.map}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {GAMEMODE_LABELS[m.gamemode]}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {fmtDuration(m.medianSec)}
+                </TableCell>
+                <TableCell className="text-right text-muted-foreground tabular-nums">
+                  {fmtDuration(m.p25Sec)}–{fmtDuration(m.p75Sec)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {m.matches.toLocaleString()}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      {!isLoading && byGamemode.length === 0 && (
+        <div className="rounded-lg border bg-card/50 p-4 text-sm text-muted-foreground">
+          Not enough completed matches yet — the sampler needs to observe a server through two
+          consecutive match boundaries before a duration counts. Check back soon.
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -396,12 +495,13 @@ function MatchesPage() {
           the real scoring pace on casual, not the farmable Valve lifetime stat. Names are in-game
           display names — click one to see probabilistic Steam-profile candidates, ranked by name,
           recent playtime and stat-snapshot deltas. These are never certain: map and region can't
-          disambiguate casual (SDR hides server location), so a shared name may match many
-          profiles.
+          disambiguate casual (SDR hides server location), so a shared name may match many profiles.
         </p>
       </div>
 
       <CasualSnapshot segments={segments} leaders={leaders} />
+
+      <MatchDurationsSection />
 
       <section className="space-y-3">
         <h2 className="font-heading text-lg font-semibold">Fastest observed scorers</h2>

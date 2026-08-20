@@ -18,19 +18,11 @@ import { getDb } from "./db.ts";
  * as chart series keys; labels live in the page. `plr_`/`tc_`/`sd_`/`arena_`/…
  * and all community maps fold into "other" to keep the charts legible.
  */
-export const GAMEMODE_KEYS = [
-  "payload",
-  "cp",
-  "koth",
-  "ctf",
-  "mvm",
-  "pd",
-  "other",
-] as const;
+export const GAMEMODE_KEYS = ["payload", "cp", "koth", "ctf", "mvm", "pd", "other"] as const;
 export type GamemodeKey = (typeof GAMEMODE_KEYS)[number];
 
 /** SQL expression mapping the `map` column to a GamemodeKey. */
-const gamemodeExpr = sql`case
+export const gamemodeExpr = sql`case
   when left(map, 4) = 'plr_' then 'other'
   when left(map, 3) = 'pl_'  then 'payload'
   when left(map, 5) = 'koth_' then 'koth'
@@ -41,7 +33,7 @@ const gamemodeExpr = sql`case
   else 'other'
 end`;
 
-function asGamemodeKey(v: unknown): GamemodeKey {
+export function asGamemodeKey(v: unknown): GamemodeKey {
   return (GAMEMODE_KEYS as readonly string[]).includes(String(v))
     ? (String(v) as GamemodeKey)
     : "other";
