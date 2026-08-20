@@ -144,6 +144,14 @@ function PlayerPage() {
           <p className="font-mono text-xs text-muted-foreground/70">
             {p.steamid} · backpack: {p.itemsStatus} · stats: {p.statsStatus}
           </p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            <ExternalLink href={`https://steamcommunity.com/profiles/${p.steamid}`}>
+              Steam profile
+            </ExternalLink>
+            <ExternalLink href={`https://backpack.tf/profiles/${p.steamid}`}>
+              backpack.tf
+            </ExternalLink>
+          </div>
         </div>
         <RecrawlButton
           onClick={() => recrawl.mutate()}
@@ -404,6 +412,21 @@ function PlayerPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Small external-link pill (Steam profile, backpack.tf) for the header. Opens
+ * in a new tab; rel="noreferrer" since these are third-party destinations. */
+function ExternalLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="rounded-md border px-2.5 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-accent"
+    >
+      {children} ↗
+    </a>
   );
 }
 

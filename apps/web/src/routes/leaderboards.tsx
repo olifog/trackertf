@@ -138,6 +138,39 @@ function Segment({
   );
 }
 
+/**
+ * A standalone board pill. Unlike the segmented class strip, the board picker
+ * has ~18 multi-word options, so these wrap onto multiple rows as individually
+ * rounded pills (`whitespace-nowrap` keeps each label on one line) instead of
+ * clipping in a single horizontal scroll strip.
+ */
+function BoardPill({
+  children,
+  active,
+  board,
+  title,
+}: {
+  children: React.ReactNode;
+  active: boolean;
+  board: string;
+  title?: string;
+}) {
+  return (
+    <Link
+      from={Route.fullPath}
+      search={(prev) => ({ ...prev, board })}
+      title={title}
+      className={`inline-flex h-8 items-center rounded-md border px-2.5 text-[13px] leading-none whitespace-nowrap transition-colors ${
+        active
+          ? "border-primary bg-primary font-medium text-primary-foreground"
+          : "border-border bg-secondary/40 text-secondary-foreground hover:bg-accent"
+      }`}
+    >
+      {children}
+    </Link>
+  );
+}
+
 /** discrete playtime-threshold slider for rate boards */
 function ThresholdSlider({ def }: { def: BoardDef }) {
   const navigate = useNavigate({ from: Route.fullPath });
@@ -227,13 +260,13 @@ function LeaderboardsPage() {
         )}
 
         <FilterRow label="Board">
-          <Segmented>
+          <div className="flex flex-wrap gap-1.5">
             {boardOptions.map((b) => (
-              <Segment key={b.key} active={b.key === board} board={b.key} title={b.label}>
+              <BoardPill key={b.key} active={b.key === board} board={b.key} title={b.label}>
                 {b.shortLabel}
-              </Segment>
+              </BoardPill>
             ))}
-          </Segmented>
+          </div>
         </FilterRow>
 
         {def.kind === "per_hour" && (

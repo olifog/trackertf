@@ -1,11 +1,15 @@
 # tracker.tf — Session Feature Audit
 
-**Date:** 2026-08-20
+**Date:** 2026-08-20 (updated post Wave-4 deploy)
 **Scope:** Every distinct idea, feature, correction, or direction olifog raised across the entire (heavily compacted) Claude Code session, cross-checked against the memory log and the actual codebase.
 
 Sources: the session transcript (`31ad068c-…jsonl`, ~64 genuine user messages spanning 2026-08-16 → 2026-08-20), the project memory files (`trackertf-resurrection.md`, `deploy-ops.md`, `botness-exclusion.md`), and the live code under `apps/web/src`, `apps/crawler/src`, `packages/*`.
 
-Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled by user
+Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled by user · 🔧 In progress (this session's second wave)
+
+> **Wave 4 (deployed 2026-08-20):** forward attribution (`segment_attributions`), the `stat_windows` builder, map×class playtime attribution (`map_class_playtime`), match/map duration stats, the sampler rethink (longer windows + **points-reset** boundary detection), and item-page strange distribution all shipped to prod. Items below updated to reflect this.
+>
+> **Second wave (in progress, NOT yet deployed):** sessions section on the player page, per-map best-weapons/leaderboards UI, winrate instrumentation, a player-page prod-error fix, and a cross-cutting query-performance pass. Marked 🔧. Final recount happens after this wave deploys.
 
 ---
 
@@ -13,12 +17,12 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled 
 
 | Status | Count |
 |---|---|
-| ✅ Done | 58 |
-| 🟡 Partial | 17 |
-| ❌ Missing / not started | 16 |
+| ✅ Done | 65 |
+| 🟡 Partial | 16 |
+| ❌ Missing / not started | 10 |
 | 🚫 Cancelled | 4 |
 
-(Counts are of the de-duplicated line items below; a handful of "impossible per Steam API" items are folded into ❌/🟡 with a note.)
+(Counts are of the de-duplicated line items below; a handful of "impossible per Steam API" items are folded into ❌/🟡 with a note. 🔧 in-progress items keep their pre-deploy status in the counts until they ship.)
 
 ---
 
@@ -31,10 +35,10 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled 
 - [x] ✅ **Players over time + favourite game modes (teamwork.tf-style)** — `/ecosystem` + `/servers` (players-over-time by gamemode 24h/7d/14d, gamemode donut).
 - [x] ✅ **Individual player pages (class stats, active loadouts)** — `/player/$steamid`.
 - [x] ✅ **"Most popular class mains" / player-type distribution** — class-playtime surfaced on `/ecosystem`. (Not a dedicated "class mains" leaderboard, but the distribution is exposed.)
-- [ ] 🟡 **Score/min paired with equipped weapon AND map → best weapons per map** — `/performance` ranks best weapons/combos by pts-hr / kills-hr / dmg-min, but the **per-MAP** dimension is NOT built (see §8 Wave-4 map attribution).
-- [ ] 🟡 **Player stats over time / best classes over time** — class-stats table + sightings timeline exist; **sessions / time-series deltas on the player page are NOT built** (window builder never shipped, §8).
+- [ ] 🔧 **Score/min paired with equipped weapon AND map → best weapons per map** — `/performance` ranks best weapons/combos by pts-hr / kills-hr / dmg-min; the map-attribution backend (`map_class_playtime` + `segment_attributions`) now ships, and the **per-MAP** best-weapons/leaderboards UI is being built this wave.
+- [ ] 🔧 **Player stats over time / best classes over time** — class-stats table + sightings timeline exist; the `stat_windows` builder now ships (§8), and the **sessions section** consuming it on the player page is being built this wave.
 - [ ] ❌ **K/D tracking + per-class K/D + K/D leaderboards** — **impossible via Steam API** (verified: `iNumDeaths` defined in schema but never uploaded; "never present K/D"). Effectively cancelled by API reality.
-- [ ] ❌ **Winrates** — not built. Requires measuring whether GCStat win/loss counters move across recrawls; never instrumented.
+- [ ] 🔧 **Winrates** — being instrumented this wave (GCStat win/loss-counter measurement across recrawls; verifying the counters actually move before building trends).
 - [ ] 🟡 **Time played on specific weapons** — no per-weapon playtime from the API; approximated only via equipped-experience thresholds (lifetime / active-2wk minutes on the item).
 - [ ] ❌ **Recover old style.tf droplet-snapshot data** — data remains lost; only the single ISR-cached usage combo (`data/styletf-cached-usage-*.json`) was preserved.
 
@@ -62,9 +66,9 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled 
 - [x] ✅ **Real "sightings" from server crawler (100% strong, unique-name matches)** — `server/sightings.ts` + `SightingsSection` (reverse of `resolveParticipant`).
 - [x] ✅ **Request-recrawl button + recrawl queue visibility** — `requestRecrawl` (priority-3 frontier insert) + `/health` "Crawl queue" section.
 - [ ] 🟡 **Player shows position on EVERY leaderboard for EVERY stat** — shows top-20 rank positions + percentile, but not literally all 151 boards / all delta-derived stats.
-- [ ] ❌ **Sessions on the player page** — depends on the un-built `stat_windows` builder (§8).
+- [ ] 🔧 **Sessions on the player page** — `stat_windows` builder now ships (§8); the sessions UI consuming it is being built this wave.
 - [ ] ❌ **MVM data on player page** — mentioned in original brainstorm; not surfaced.
-- [ ] ⚠️ **Prod error when loading a player page (msg 192, the LAST user message, 2026-08-20 19:24)** — screenshot bug report; **no evidence it was addressed.** See "Needs attention".
+- [ ] 🔧 **Prod error when loading a player page (msg 192, 2026-08-20 19:24)** — screenshot bug report; being hunted + fixed this wave (reproduce on live `/player/$steamid` edge cases → guard the defect).
 
 ---
 
@@ -105,7 +109,7 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled 
 - [x] ✅ **Item stats/info page** — `/item/$defindex`.
 - [x] ✅ **Most-commonly-paired weapons, filterable by experience** — `fetchItemPairs` (CH ARRAY JOIN on `weapon_gids`).
 - [x] ✅ **Ap-Sap kept as a variant** (correct per user).
-- [ ] 🟡 **Strange distribution on the item page** — no dedicated strange-distribution block found in `server/item.ts`; partial at best.
+- [x] ✅ **Strange distribution on the item page** — `fetchStrangeDist` + `StrangeDistribution` component (materialized `equipped_items.strange_kills`, botness<0.5, percentiles + strange-tier breakdown). Shipped Wave 4.
 
 ---
 
@@ -142,14 +146,14 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled 
 - [x] ✅ **Matches table** tracking which player-names scored what (`match_segments` / `match_participants` → CH `match_obs`).
 - [x] ✅ **Delta foundation** — append-only `player_stat_snapshots`, recrawl scheduler, delta-aware crawl (skips `GetPlayerItems` when class-time unchanged).
 - [x] ✅ **Reverse profile matching** (sightings): match-segment name → profile, corroborated by stat-delta intervals + name-uniqueness.
-- [ ] ❌ **FORWARD attribution (≥90% confidence): segment participant name → steamid, persisted** — Wave-4 plan; NOT built. `/matches` still shows unlinked names.
-- [ ] ❌ **Full stat-window builder (`stat_windows` table: reset / upload-lag / pure-class / pure-map flags)** — no `stat_windows` anywhere in the codebase.
+- [x] ✅ **FORWARD attribution (≥90% confidence): segment participant name → steamid, persisted** — `apps/crawler/src/attributor.ts` (15-min loop, mirrors `resolveParticipant` scoring in SQL) writes ≥0.9 rows to `segment_attributions`. Shipped Wave 4. *(Linking these into the `/matches` UI is a follow-up.)*
+- [x] ✅ **Full stat-window builder (`stat_windows` table: reset / upload-lag / pure-class / pure-map flags)** — `stat_windows` table + builder shipped Wave 4 (producing windows in prod). Sessions UI consuming it is 🔧 this wave (§2).
 - [ ] ❌ **NNLS map-rate regression** — not built.
-- [ ] ❌ **Map×class playtime attribution ("what classes people play on koth_lakeside")** — the "killer feature" from Wave-4 plan; not built.
+- [x] ✅ **Map×class playtime attribution ("what classes people play on koth_lakeside")** — `map_class_playtime` table populated by the attributor; basic map×class section on `/matches`. Shipped Wave 4. Richer per-map UI is 🔧 this wave.
 - [ ] ❌ **Attribute a player's Valve-stat growth to the opponents they played against** — proposed msg 91; not built.
-- [ ] ❌ **Match/map duration stat via scanner map-tenure** (median match length by map/gamemode from the 5-min `GetServerList`) — Wave-4 plan; per-server identity currently discarded; not built.
-- [ ] ❌ **Rethink sampler window architecture (msg 187, 2026-08-20 19:17)** — "sample more times over more than 20 minutes; 6-min windows have too much variance." **Not implemented** — sampler still runs 5 rounds over a ~20-min cycle with ~6-12-min effective segments.
-- [ ] ❌ **Close segments by points-reset, not map-change (msg 190)** — "servers that stay on the same map won't be caught by map-change." **Not implemented** — `sampler.ts` still closes segments on map change / server emptying only.
+- [x] ✅ **Match/map duration stat via scanner map-tenure** (median match length by map/gamemode) — shipped Wave 4 (`matchDurations.ts`; segment span = real match length via `reason_closed`).
+- [x] ✅ **Rethink sampler window architecture (msg 187)** — sampler rebuilt (`sampler.ts`): continuous same-server tracking, segments live the real match duration with ~4-min observations instead of a bursty 12-min cycle. Shipped Wave 4.
+- [x] ✅ **Close segments by points-reset, not map-change (msg 190)** — `sampler.ts` `isReset()` closes segments on a majority score-drop (`score_reset`) as well as map-change, so back-to-back matches on the same map are caught. Shipped Wave 4.
 
 ---
 
@@ -204,15 +208,19 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing / not started · 🚫 Cancelled 
 
 These are the items most worth doing next — either the user's latest un-actioned asks, explicit bug reports with no fix evidence, or high-value ideas that were planned but never built.
 
-1. **⚠️ Player-page prod error (msg 192 — the final message, never answered).** A screenshotted runtime error loading a player page. No fix in the log after it was raised. **Verify + fix first.**
-2. **❌ Sampler window architecture rethink (msg 187/190 — the last substantive direction).** Sample over a longer window (>20 min) to cut variance, and close segments on **points-reset** rather than map-change (so same-map servers are captured). Still unimplemented.
-3. **🟡 Statistical-significance re-audit (msg 177).** User flagged that the two n-values may not respect the active filters; no evidence it was re-checked.
-4. **❌ Forward profile attribution (≥90%) for `/matches`.** Reverse (sightings) shipped; forward never did, so `/matches` still shows unlinked names — blocks the whole "linked players in matches" experience.
-5. **❌ Stat-window builder (`stat_windows`) + sessions on the player page.** The delta *foundation* exists but the builder that turns snapshot pairs into windows was never built — it gates sessions, causal weapon stats, and the map work below.
-6. **❌ Map×class playtime attribution (the Wave-4 "killer feature") + per-map best-weapons/leaderboards.** "What classes people play most on koth_lakeside", best weapons per map, per-map playtime boards. The original PLAN's headline differentiator; still absent.
-7. **❌ Match/map duration stat.** Median match length by map & gamemode from the existing 5-min `GetServerList` map-tenure — zero extra API cost, currently thrown away.
-8. **❌ Winrates.** Never instrumented; needs a GCStat win/loss-counter measurement pass.
-9. **🟡 Per-item strange leaderboards** (deferred) and **🟡 item-page strange distribution** — small, self-contained wins the user asked for more than once.
+**Shipped since this list was first written (Wave 4 + second wave in progress):** sampler rethink + points-reset boundary (✅), forward attribution (✅), `stat_windows` builder (✅), map×class attribution (✅), match/map duration (✅), item-page strange distribution (✅). Player-page prod error, sessions UI, per-map best-weapons/boards, and winrates are 🔧 in progress this wave.
+
+Still open / next:
+
+1. **🔧 Player-page prod error (msg 192).** Being hunted + fixed this wave (reproduce live edge cases → guard).
+2. **🔧 Sessions on the player page** — consuming the now-shipped `stat_windows`.
+3. **🔧 Map×class per-map UI + per-map best-weapons/leaderboards** — the backend (`map_class_playtime`, attribution) shipped; the richer UI is being built.
+4. **🔧 Winrates** — GCStat win/loss-counter measurement pass, being instrumented.
+5. **🔧 Query-performance pass** — profiling every user-facing PG/CH query against prod and applying + reporting fixes (indexes, materialized aggregates, collapsed round-trips).
+6. **🟡 Statistical-significance re-audit (msg 177).** User flagged that the two n-values may not respect the active filters; no evidence it was re-checked. Still open.
+7. **➡️ Link attributed players into the `/matches` UI.** Forward attribution now persists ≥0.9 `segment_attributions`, but `/matches` doesn't yet render the resolved steamids.
+8. **❌ NNLS map-rate regression** and **❌ opponent-growth attribution (msg 91)** — still not built.
+9. **🟡 Per-item strange leaderboards** (deferred) — small self-contained win.
 10. **🟡 Remaining teamwork.tf-parity gaps:** competitive-provider stats, official-vs-unofficial map split, and per-Valve-server occupancy (needs per-server rows). Plus **distribution graphs on leaderboards** and **cosmetic/taunt combo trackers** from the original brainstorm.
 
 **Confirmed cancelled (do not build):** combos/performance reskin-unmerge toggle (msg 128); logs.tf / community-server sourcing (demoted to stretch, official Valve only); client-side quantized-stats interpolation (superseded by ClickHouse); retiring London Lightsail (explicitly kept).
