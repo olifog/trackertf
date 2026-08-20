@@ -1,14 +1,12 @@
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "#/components/ui/card";
 import { FilterRow, Segmented } from "#/components/ui/filter-bar";
 import {
   ChartContainer,
   type ChartConfig,
-  ChartLegend,
-  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
 } from "#/components/ui/chart";
@@ -125,16 +123,6 @@ function fmtAgo(unixSec: number): string {
   return hours < 48 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
 }
 
-// Distinct hues for the region pie, cycled by slice index.
-const REGION_COLORS = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-5)",
-  "var(--muted-foreground)",
-];
-
 const mapConfig = {
   players: { label: "Players observed", color: "var(--primary)" },
 } satisfies ChartConfig;
@@ -142,8 +130,6 @@ const mapConfig = {
 const histConfig = {
   players: { label: "Scorers", color: "var(--chart-2)" },
 } satisfies ChartConfig;
-
-const regionConfig = { players: { label: "Players" } } satisfies ChartConfig;
 
 /** 2-letter ISO country code → regional-indicator flag emoji ("" if invalid). */
 function countryFlag(code: string | null): string {
@@ -287,14 +273,6 @@ function CasualSnapshot({ segments, leaders }: { segments: SegmentRow[]; leaders
       .slice(0, 8);
   }, [segments]);
 
-  const byRegion = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const s of segments) m.set(s.region, (m.get(s.region) ?? 0) + s.participants);
-    return [...m.entries()]
-      .map(([region, players]) => ({ region: regionLabel(region), players }))
-      .sort((a, b) => b.players - a.players);
-  }, [segments]);
-
   const hist = useMemo(() => {
     const buckets = PPH_EDGES.map((lo, i) => {
       const hi = PPH_EDGES[i + 1];
@@ -316,7 +294,7 @@ function CasualSnapshot({ segments, leaders }: { segments: SegmentRow[]; leaders
   if (segments.length === 0 && leaders.length === 0) return null;
 
   return (
-    <div className="grid gap-6 lg:grid-cols-3">
+    <div className="grid gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader>
           <CardTitle>Most-sampled maps</CardTitle>
@@ -337,34 +315,6 @@ function CasualSnapshot({ segments, leaders }: { segments: SegmentRow[]; leaders
               <ChartTooltip content={<ChartTooltipContent />} />
               <Bar dataKey="players" fill="var(--color-players)" radius={4} />
             </BarChart>
-          </ChartContainer>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Sampled players by region</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ChartContainer config={regionConfig} className="mx-auto aspect-square h-[240px]">
-            <PieChart>
-              <ChartTooltip content={<ChartTooltipContent nameKey="region" hideLabel />} />
-              <Pie
-                data={byRegion}
-                dataKey="players"
-                nameKey="region"
-                innerRadius={50}
-                strokeWidth={2}
-              >
-                {byRegion.map((slice, i) => (
-                  <Cell
-                    key={slice.region}
-                    fill={REGION_COLORS[i % REGION_COLORS.length] ?? "var(--chart-1)"}
-                  />
-                ))}
-              </Pie>
-              <ChartLegend content={<ChartLegendContent nameKey="region" />} />
-            </PieChart>
           </ChartContainer>
         </CardContent>
       </Card>
