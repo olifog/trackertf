@@ -52,9 +52,13 @@ const boardKeySchema = z
 
 /**
  * Strange-kill leaderboard: rank crawled players by kills on their Strange
- * (quality 11) equipped items. `strange:total` sums every equipped Strange
- * counter a player is displaying; `strange:max` takes their single highest
- * counter. Sourced from ClickHouse `equipped` (the only place quality /
+ * (quality 11) equipped items. `equipped` stores one row per
+ * (steamid, class_num, slot, defindex), so a single physical item run across
+ * multiple class loadouts appears as multiple rows; we first collapse to
+ * distinct items per player (max counter per (steamid, defindex)) so nothing is
+ * multi-counted. `strange:total` then sums each distinct Strange item's counter
+ * a player is displaying; `strange:max` takes their single highest counter.
+ * Sourced from ClickHouse `equipped` (the only place quality /
  * strange_kills live), then joined back to Postgres `players` for persona /
  * avatar and the POP filter (public persona, no VAC ban, botness < 0.5 — the
  * same bot/outlier exclusion boards.ts applies to the grid boards).
@@ -64,19 +68,27 @@ const boardKeySchema = z
 async function fetchStrangeBoard(board: StrangeBoardKey): Promise<LeaderboardResponse> {
   const agg =
     board === "strange:max"
-      ? "max(strange_kills)"
+      ? "max(item_kills)"
       : board === "strange:haleown"
-        ? `countIf(strange_kills >= ${HALE_OWN_KILLS})`
-        : "sum(strange_kills)";
+        ? `countIf(item_kills >= ${HALE_OWN_KILLS})`
+        : "sum(item_kills)";
   // Hale's Own is a count of maxed items, so drop players with zero (they'd
   // otherwise pad the tail); the other boards already require strange_kills > 0.
   const having = board === "strange:haleown" ? "having value > 0" : "";
+  // Collapse to one row per distinct physical item first — `equipped` has one
+  // row per (steamid, class_num, slot, defindex), so a multi-class Strange
+  // would otherwise be summed/counted once per class. group by (steamid,
+  // defindex) taking the highest counter, then aggregate at the player level.
   // over-fetch from CH so POP-filtered dropouts in PG still leave a full top-100
   const chRows = await chQuery<{ steamid: string; value: string | number }>(
     getCh(),
     `select toString(steamid) as steamid, toUInt64(${agg}) as value
-     from equipped
-     where quality = 11 and strange_kills > 0
+     from (
+       select steamid, defindex, max(strange_kills) as item_kills
+       from equipped
+       where quality = 11 and strange_kills > 0
+       group by steamid, defindex
+     )
      group by steamid
      ${having}
      order by value desc
@@ -247,7 +259,10 @@ export const fetchPlayerRanks = createServerFn({ method: "GET" })
         value: hours["value"] as number,
       });
     }
-    return ranks.toSorted((a, b) => a.rank / a.of - b.rank / b.of);
+    // guard against a 0-participant board: rank/of would be NaN and poison the
+    // sort — treat an empty board's ratio as 1 so it sorts to the end.
+    const ratio = (r: PlayerRankRow) => (r.of > 0 ? r.rank / r.of : 1);
+    return ranks.toSorted((a, b) => ratio(a) - ratio(b));
   });
 
 export const playerRanksQueryOptions = (steamid: string) =>

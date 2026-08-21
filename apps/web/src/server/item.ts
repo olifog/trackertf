@@ -363,8 +363,9 @@ export const fetchStrangeDist = createServerFn({ method: "GET" })
 
     // Map each counter to its rank-tier floor via a descending CASE built from
     // STRANGE_RANKS, so the histogram bucketing lives in SQL alongside the
-    // percentiles. One copy per (player, class) — a multi-class Strange folds to
-    // its highest counter first so it counts once.
+    // percentiles. One copy per distinct physical item (player, defindex) — a
+    // multi-class Strange folds to its highest counter first so it counts once,
+    // matching the per-player fetchItemStrangeBoard unit.
     const tierCase = sql.join(
       STRANGE_RANKS.toReversed().map((r) => sql`when k >= ${r.kills} then ${r.kills}`),
       sql` `,
@@ -382,7 +383,7 @@ export const fetchStrangeDist = createServerFn({ method: "GET" })
         join players p using (steamid)
         where e.defindex in (${idList}) and e.quality = 11 and e.strange_kills > 0
           and coalesce(p.botness, 0) < 0.5
-        group by e.steamid, e.class_num
+        group by e.steamid, e.defindex
       ),
       summary as (
         select

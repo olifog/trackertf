@@ -264,7 +264,7 @@ export const fetchHealth = createServerFn({ method: "GET" }).handler(
         crawledLastHour: crawl?.["crawled_last_hour"] ?? 0,
       },
       corpus: {
-        playersTracked: num(corpus?.["total"]),
+        playersTracked: num(corpus?.["players"]),
         activePlayers2wk: num(corpus?.["active"]),
         totalTrackedHours: Math.round(num(corpus?.["minutes"]) / 60),
       },
