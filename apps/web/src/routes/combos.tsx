@@ -1,6 +1,7 @@
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { NOT_ENOUGH_DATA } from "#/lib/copy";
 import { bySlot } from "#/lib/slots";
 import { formatPValue, type ProportionTest, twoProportionZTest } from "#/lib/stats";
 import { FilterRow, Segmented } from "#/components/ui/filter-bar";
@@ -359,18 +360,13 @@ function CombosPage() {
 
       {(search.minutes === 240_000 || search.minutesB === 240_000) && (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-200/90">
-          The 4000h+ bucket skews heavily toward idle and bot accounts, which
-          barely change loadouts — its shares aren't representative of how the
-          weapon is actually played. Prefer 100h+ → 2000h+ for meaningful
-          comparisons.
+          4000h+ skews to idle/bot accounts; prefer 100h+–2000h+.
         </div>
       )}
 
       {visibleRows.length === 0 && !query.isFetching ? (
         <p className="text-muted-foreground">
-          {needle
-            ? "No combos match that search."
-            : "No combos yet for this filter combination. The crawler is warming up."}
+          {needle ? "No combos match that search." : NOT_ENOUGH_DATA}
         </p>
       ) : (
         <div className="relative">
@@ -524,7 +520,7 @@ function UsagePct({ usage, count }: { usage: number; count?: number }) {
 function StockBadge() {
   return (
     <span
-      title="All-stock combo. High-hour bot/idle accounts that never equip anything inflate the high-experience stock population, so this combo's share — and especially its compare-mode delta — is unreliable."
+      title="All-stock combo — inflated by idle/bot accounts; share/delta unreliable."
       className="inline-flex shrink-0 items-center rounded border border-amber-500/30 bg-amber-500/10 px-1 py-0.5 font-mono text-[10px] leading-none text-amber-600 dark:text-amber-400"
     >
       ⚠ stock

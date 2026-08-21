@@ -2,6 +2,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 import { FilterRow, Segmented } from "#/components/ui/filter-bar";
+import { InfoTip } from "#/components/ui/info-tip";
 import { Slider } from "#/components/ui/slider";
 import {
   Table,
@@ -257,7 +258,15 @@ function LeaderboardsPage() {
 
   return (
     <div className="space-y-5">
-      <h1 className="font-heading text-2xl font-bold">Leaderboards</h1>
+      <h1 className="font-heading text-2xl font-bold">
+        Leaderboards
+        <InfoTip className="ml-1.5">
+          Among crawled players with public profiles, no VAC bans. Sample skews connected and
+          veteran players.
+          {strange && <> Counts come from players' currently equipped Strange (quality 11) items.</>}
+          {def.kind === "per_hour" && <> Rate boards require {currentHours}+ hours on the scope.</>}
+        </InfoTip>
+      </h1>
 
       <div className="space-y-3 rounded-lg border bg-card/50 p-4">
         {!strange && (
@@ -332,15 +341,11 @@ function LeaderboardsPage() {
         )}
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        Among crawled players with public profiles, no VAC bans
-        {participants !== null && <>, {participants.toLocaleString()} qualifying players</>}.
-        {strange && <> Counts come from players' currently equipped Strange (quality 11) items.</>}
-        {def.kind === "per_hour" && (
-          <> Rate boards require {currentHours}+ hours on the scope.</>
-        )}{" "}
-        Sample skews connected and veteran players.
-      </p>
+      {participants !== null && (
+        <p className="text-xs text-muted-foreground">
+          {participants.toLocaleString()} qualifying players.
+        </p>
+      )}
 
       <Table>
         <TableHeader>

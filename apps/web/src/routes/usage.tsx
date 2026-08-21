@@ -2,6 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-qu
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FilterRow, Segmented } from "#/components/ui/filter-bar";
+import { InfoTip } from "#/components/ui/info-tip";
 import { Slider } from "#/components/ui/slider";
 import { Switch } from "#/components/ui/switch";
 import {
@@ -12,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { NOT_ENOUGH_DATA } from "#/lib/copy";
 import { formatPValue, twoProportionZTest } from "#/lib/stats";
 import {
   DELTA_PERIODS,
@@ -371,7 +373,15 @@ function UsagePage() {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h1 className="font-heading text-2xl font-bold">Weapon usage</h1>
+        <h1 className="font-heading text-2xl font-bold">
+          Weapon usage
+          {xp && (
+            <InfoTip
+              className="ml-1.5"
+              text="Equip share: less-experienced vs experienced players, this class+slot. Positive = veterans favour it."
+            />
+          )}
+        </h1>
         {xp ? (
           popA !== null && (
             <p className="font-mono text-xs text-muted-foreground">
@@ -524,39 +534,25 @@ function UsagePage() {
         </FilterRow>
       </div>
 
-      {xp && (
-        <p className="text-xs text-muted-foreground">
-          Adoption among <span className="text-foreground">less-experienced</span> vs{" "}
-          <span className="text-foreground">experienced</span> players for this class + slot: the
-          share of each group who equip the item, and the percentage-point delta between them.
-          Positive deltas are items veterans favour. Grouped by reskin family over the equip corpus,
-          independent of recent activity.
-        </p>
-      )}
       {showCompare && !isHeadline && (
         <p className="text-xs text-muted-foreground">
-          Deltas are tracked for the default view only — reset Class, Slot, Hours and Active to
-          "Any"/"All" (merged) to compare.
+          Deltas only in the default view (reset all filters).
         </p>
       )}
       {showCompare && isHeadline && deltaQuery.data && !deltaQuery.data.enoughHistory && (
         <p className="text-xs text-muted-foreground">
           Deltas accrue daily
-          {deltaQuery.data.comparisonDay && <> — first snapshot {deltaQuery.data.comparisonDay}</>}.
-          Check back in a few days.
+          {deltaQuery.data.comparisonDay && <> — from {deltaQuery.data.comparisonDay}</>}.
         </p>
       )}
       {showCompare && isHeadline && deltaQuery.data?.enoughHistory && (
         <p className="text-xs text-muted-foreground">
-          Usage change vs {deltaQuery.data.comparisonDay} ({deltaQuery.data.days}d), in percentage
-          points.
+          vs {deltaQuery.data.comparisonDay} ({deltaQuery.data.days}d), in pp.
         </p>
       )}
 
       {items.length === 0 && !query.isFetching ? (
-        <p className="text-muted-foreground">
-          No data yet for this filter combination. The crawler is warming up.
-        </p>
+        <p className="text-muted-foreground">{NOT_ENOUGH_DATA}</p>
       ) : (
         <div className="relative">
           <Table className="md:table-fixed">

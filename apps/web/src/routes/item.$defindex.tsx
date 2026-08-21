@@ -1,6 +1,7 @@
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useState } from "react";
+import { InfoTip } from "#/components/ui/info-tip";
 import {
   Table,
   TableBody,
@@ -91,9 +92,7 @@ function ItemPage() {
         <div>
           <h2 className="mb-2 font-heading text-lg font-semibold">
             Usage by class{" "}
-            <span className="text-sm font-normal text-muted-foreground">
-              (reskins merged; n = {usage[0]?.sampleSize.toLocaleString()} for all players)
-            </span>
+            <span className="text-sm font-normal text-muted-foreground">(reskins merged)</span>
           </h2>
           <Table>
             <TableHeader>
@@ -138,10 +137,8 @@ function ItemPage() {
       {perf.length > 0 && (
         <div>
           <h2 className="mb-2 font-heading text-lg font-semibold">
-            Performance of players equipping this{" "}
-            <span className="text-sm font-normal text-muted-foreground">
-              (lifetime per-class rates, 10h+ on class, correlation not causation)
-            </span>
+            Performance of players equipping this
+            <InfoTip className="ml-1.5" text="Correlational; 10h+ on class." />
           </h2>
           <Table>
             <TableHeader>
@@ -316,9 +313,7 @@ function StrangeLeaderboard({ defindex }: { defindex: number }) {
     <div>
       <h2 className="mb-2 font-heading text-lg font-semibold">
         Top Strange kills{" "}
-        <span className="text-sm font-normal text-muted-foreground">
-          (highest kill-eater counters on this item; public profiles, no VAC bans)
-        </span>
+        <span className="text-sm font-normal text-muted-foreground">(public profiles, no VAC)</span>
       </h2>
       <Table>
         <TableHeader>
@@ -393,9 +388,7 @@ function PairedWeapons({ defindex }: { defindex: number }) {
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="font-heading text-lg font-semibold">
           Most commonly paired weapons{" "}
-          <span className="text-sm font-normal text-muted-foreground">
-            (equipped in the same loadout; reskins merged)
-          </span>
+          <span className="text-sm font-normal text-muted-foreground">(reskins merged)</span>
         </h2>
         <div className="inline-flex divide-x divide-border overflow-hidden rounded-md border">
           {PAIR_POPULATIONS.map((p) => (

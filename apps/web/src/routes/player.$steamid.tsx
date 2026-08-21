@@ -1,6 +1,7 @@
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
+import { InfoTip } from "#/components/ui/info-tip";
 import {
   Table,
   TableBody,
@@ -109,9 +110,7 @@ function PlayerPage() {
         <h1 className="font-heading text-2xl font-bold">Player not crawled yet</h1>
         <p className="text-muted-foreground">
           <span className="font-mono">{steamid}</span> isn't in the dataset yet.
-          {p.queued
-            ? " It's been queued for crawling, check back in a few minutes."
-            : " Queueing failed; try again later."}
+          {p.queued ? " Queued for crawling — check back soon." : " Queueing failed; try again."}
         </p>
       </div>
     );
@@ -163,7 +162,10 @@ function PlayerPage() {
 
       {sortedStats.length > 0 ? (
         <div>
-          <h2 className="mb-2 font-heading text-lg font-semibold">Class stats (lifetime)</h2>
+          <h2 className="mb-2 font-heading text-lg font-semibold">
+            Class stats (lifetime)
+            <InfoTip className="ml-1.5" text="No deaths stat in Steam's TF2 data, so no K/D." />
+          </h2>
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
@@ -225,9 +227,6 @@ function PlayerPage() {
               ))}
             </TableBody>
           </Table>
-          <p className="mt-1 text-xs text-muted-foreground">
-            No deaths stat exists in Steam's TF2 data, so no K/D.
-          </p>
         </div>
       ) : (
         <p className="text-muted-foreground">Game stats are private for this player.</p>
@@ -282,7 +281,7 @@ function PlayerPage() {
             </TableBody>
           </Table>
           <p className="mt-1 text-xs text-muted-foreground">
-            Best {bestRanks.length} of {ranks.length} boards, ranked live among crawled players.
+            Best {bestRanks.length} of {ranks.length} boards.
           </p>
         </div>
       )}
@@ -317,8 +316,7 @@ function PlayerPage() {
             </TableBody>
           </Table>
           <p className="mt-1 text-xs text-muted-foreground">
-            Ranked live among {friendRanks.total.toLocaleString()} crawled friends (public,
-            non-VAC).
+            {friendRanks.total.toLocaleString()} crawled friends.
           </p>
         </div>
       )}
@@ -486,13 +484,13 @@ function recrawlEta(r: RecrawlResult): string {
 function SightingsSection({ sightings }: { sightings: PlayerSightings }) {
   return (
     <div>
-      <h2 className="mb-1 font-heading text-lg font-semibold">Recent sightings</h2>
-      <p className="mb-2 max-w-2xl text-xs text-muted-foreground">
-        Casual matches our sampler saw this player's name in over the last 30 days, confirmed by a
-        lifetime-playtime increase spanning the match — and unique to them (no other same-named
-        profile was also playing then). In-game names, not linked accounts, so this is a strong
-        inference, not a certainty.
-      </p>
+      <h2 className="mb-2 font-heading text-lg font-semibold">
+        Recent sightings
+        <InfoTip
+          className="ml-1.5"
+          text="Name seen by sampler + confirmed by playtime gain, last 30d. Strong inference, not certain."
+        />
+      </h2>
       {sightings.sightings.length > 0 ? (
         <Table>
           <TableHeader>
@@ -530,9 +528,7 @@ function SightingsSection({ sightings }: { sightings: PlayerSightings }) {
       )}
       {sightings.ambiguous > 0 && (
         <p className="mt-1 text-xs text-muted-foreground">
-          {sightings.ambiguous.toLocaleString()} more corroborated match
-          {sightings.ambiguous === 1 ? "" : "es"} hidden — another player shares this name and was
-          also playing then, so we can't attribute them.
+          {sightings.ambiguous.toLocaleString()} hidden (name shared by another active player).
         </p>
       )}
     </div>
@@ -555,12 +551,13 @@ function formatSessionLength(seconds: number): string {
 function SessionsSection({ sessions }: { sessions: PlayerSessions }) {
   return (
     <div>
-      <h2 className="mb-1 font-heading text-lg font-semibold">Recent sessions</h2>
-      <p className="mb-2 max-w-2xl text-xs text-muted-foreground">
-        Play windows reconstructed from the gap between lifetime-stat snapshots — how long was
-        played and on which class. The map is shown only when we could pin the whole window to a
-        single map via sampler sightings; class time is exact, from Steam's own per-class stats.
-      </p>
+      <h2 className="mb-2 font-heading text-lg font-semibold">
+        Recent sessions
+        <InfoTip
+          className="ml-1.5"
+          text="Reconstructed from stat-snapshot gaps. Map shown only when pinnable."
+        />
+      </h2>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">

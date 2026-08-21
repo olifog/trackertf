@@ -2,7 +2,9 @@ import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { bySlot } from "#/lib/slots";
+import { NOT_ENOUGH_DATA } from "#/lib/copy";
 import { FilterRow, Segmented } from "#/components/ui/filter-bar";
+import { InfoTip } from "#/components/ui/info-tip";
 import {
   Table,
   TableBody,
@@ -246,25 +248,17 @@ function PerformancePage() {
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
-        <h1 className="font-heading text-2xl font-bold">Weapon performance</h1>
-        <p className="text-[11px] text-muted-foreground sm:max-w-md sm:text-right">
-          {search.source === "session" ? (
-            <>
-              Session. Each value is the median {metric.label.toLowerCase()} measured during windows
-              where the weapon set was equipped (accruing) — deltas between crawls, not whole-career
-              rates. Forward-accruing and thin until data builds. Per-window rates are medianed
-              (never summed); a per-window cap keeps outliers out. Rows with under {LOW_SAMPLE}{" "}
-              players are de-emphasized.
-            </>
-          ) : (
-            <>
-              Correlational. Each value is the median {metric.label.toLowerCase()} of players who
-              equip the item, not the weapon's isolated effect. Median + a per-player cap keep
-              farming-server outliers out. Medians aren't significance-tested (no per-group variance
-              is stored); rows with under {LOW_SAMPLE} equippers are de-emphasized.
-            </>
-          )}
-        </p>
+        <h1 className="font-heading text-2xl font-bold">
+          Weapon performance
+          <InfoTip
+            className="ml-1.5"
+            text={
+              search.source === "session"
+                ? "Median per-window rate while equipped. Accruing; faint rows <20 players."
+                : "Median stat of players who equip it — correlational, not the weapon's effect. Faint rows <20 equippers."
+            }
+          />
+        </h1>
       </div>
 
       <div className="space-y-3 rounded-lg border bg-card/50 p-4">
@@ -386,9 +380,7 @@ function PerformancePage() {
 
       {visibleRows.length === 0 && !query.isFetching ? (
         <p className="text-muted-foreground">
-          {needle
-            ? "No items match that search."
-            : "No data yet for this filter combination. The crawler is warming up."}
+          {needle ? "No items match that search." : NOT_ENOUGH_DATA}
         </p>
       ) : (
         <div className="relative">
