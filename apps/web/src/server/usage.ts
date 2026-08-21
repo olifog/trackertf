@@ -74,12 +74,16 @@ export interface UsageRow {
 }
 
 type UsageDbRow = Omit<UsageRow, "computedAt" | "usageB" | "countB" | "delta"> & {
-  computedAt: Date;
+  /** Date via the typed .select() path, string via raw db.execute */
+  computedAt: Date | string;
 };
 
 const toIso = (r: UsageDbRow): UsageRow => ({
   ...r,
-  computedAt: r.computedAt.toISOString(),
+  // raw db.execute (the main usage query) bypasses drizzle's timestamp decoding
+  // and hands back computed_at as a string; the typed .select() path gives a
+  // Date. Coerce so both are handled.
+  computedAt: new Date(r.computedAt).toISOString(),
   usageB: null,
   countB: null,
   delta: null,
