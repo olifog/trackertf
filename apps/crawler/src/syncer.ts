@@ -1,6 +1,6 @@
 /**
  * PG -> ClickHouse ETL. Every INTERVAL, rebuilds the analytics tables (equipped,
- * loadout, player_class, match_obs) from Postgres into staging tables, then
+ * loadout, player_class, match_obs, window_perf) from Postgres into staging tables, then
  * atomically EXCHANGEs them into place. Postgres stays the source of truth;
  * ClickHouse serves the heavy analytical reads (usage, combos, deltas,
  * performance) with arbitrary experience thresholds at query time.
@@ -36,6 +36,13 @@ const ENRICHED_EQUIPPED = sql`
   join players p on p.steamid = e.steamid and p.items_status = 'ok'
     and coalesce(p.botness, 0) < 0.5
   left join item_schema s on s.defindex = e.defindex`;
+
+/** cgid for a loadout weapon triple (aliased `e`, item_schema `s`) — mirrors
+ * ENRICHED_EQUIPPED's cgid so window_perf weapon groups match the usage tables */
+const WINDOW_CGID = sql`case when coalesce(s.reskin_group, e.defindex)
+              = (select coalesce(reskin_group, 264) from item_schema where defindex = 264)
+         then ${PAN_REMAP}
+         else coalesce(s.reskin_group, e.defindex) end`;
 
 async function swap(name: string, fill: (staging: string) => Promise<void>): Promise<void> {
   const staging = `${name}_staging`;
@@ -136,10 +143,76 @@ async function syncMatchObs(): Promise<void> {
   await swap("match_obs", (staging) => insertRows(ch, staging, rows));
 }
 
+/**
+ * Session performance facts: explode stat_windows' statDeltas per moved class,
+ * fold the stored END loadout's slot<=6 weapons for that class into weapon_gids
+ * (same PAN_REMAP/reskin_group cgid mapping as ENRICHED_EQUIPPED), and carry the
+ * per-window playtime (from class_deltas) + flags. Full rebuild each pass.
+ */
+async function syncWindowPerf(): Promise<void> {
+  const rows = (await db.execute(sql`
+    select sw.steamid::text as steamid,
+           (sd.key)::smallint as class_num,
+           extract(epoch from sw.ended_at)::bigint as ended_at,
+           coalesce((sw.class_deltas ->> sd.key)::int, 0) as playtime_sec,
+           coalesce((sd.value ->> 'kills')::int, 0) as kills,
+           coalesce((sd.value ->> 'assists')::int, 0) as assists,
+           coalesce((sd.value ->> 'damage')::bigint, 0) as damage,
+           coalesce((sd.value ->> 'points')::int, 0) as points,
+           coalesce((sd.value ->> 'dominations')::int, 0) as dominations,
+           coalesce((sd.value ->> 'captures')::int, 0) as captures,
+           coalesce((sd.value ->> 'defenses')::int, 0) as defenses,
+           coalesce(wg.weapon_gids, '{}'::int[]) as weapon_gids,
+           case when sw.loadout_stable then 1 else 0 end as loadout_stable,
+           case when sw.pure_class then 1 else 0 end as pure_class,
+           case when sw.pure_map then 1 else 0 end as pure_map,
+           coalesce(sw.map, '') as map,
+           coalesce(p.tf2_minutes, 0) as lifetime_min,
+           coalesce(p.tf2_minutes_2wk, 0) as active_2wk_min
+    from stat_windows sw
+    cross join lateral jsonb_each(sw.stat_deltas) as sd
+    join players p on p.steamid = sw.steamid and coalesce(p.botness, 0) < 0.5
+    left join lateral (
+      select array_agg(distinct ${WINDOW_CGID} order by ${WINDOW_CGID}) as weapon_gids
+      from jsonb_array_elements(sw.loadout) as tri
+      cross join lateral (
+        select (tri.value ->> 0)::int as defindex,
+               (tri.value ->> 1)::int as class_num,
+               (tri.value ->> 2)::int as slot
+      ) e
+      left join item_schema s on s.defindex = e.defindex
+      where e.slot <= 6 and e.class_num = (sd.key)::int
+    ) wg on true
+    where sw.reset = false and sw.stat_deltas <> '{}'::jsonb
+  `)) as unknown as Record<string, unknown>[];
+  const windowRows = rows.map((r) => ({
+    steamid: r["steamid"],
+    class_num: r["class_num"],
+    ended_at: r["ended_at"],
+    playtime_sec: r["playtime_sec"],
+    kills: r["kills"],
+    assists: r["assists"],
+    damage: r["damage"],
+    points: r["points"],
+    dominations: r["dominations"],
+    captures: r["captures"],
+    defenses: r["defenses"],
+    weapon_gids: r["weapon_gids"] ?? [],
+    loadout_stable: r["loadout_stable"],
+    pure_class: r["pure_class"],
+    pure_map: r["pure_map"],
+    map: r["map"],
+    lifetime_min: r["lifetime_min"],
+    active_2wk_min: r["active_2wk_min"],
+  }));
+  await swap("window_perf", (staging) => insertRows(ch, staging, windowRows));
+}
+
 async function syncAll(): Promise<void> {
   await syncEquipped();
   await syncPlayerClass();
   await syncMatchObs();
+  await syncWindowPerf();
 }
 
 async function main(): Promise<void> {

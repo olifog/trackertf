@@ -22,7 +22,7 @@
  * are logged so truncation is never silent.
  */
 import { createDbFromEnv, schema } from "@trackertf/db";
-import { parseClassStats } from "./parse.ts";
+import { type ClassStatsRow, parseClassStats } from "./parse.ts";
 import { sql } from "drizzle-orm";
 
 const db = createDbFromEnv();
@@ -212,9 +212,14 @@ async function attributeParticipants(): Promise<void> {
   );
 }
 
+/** an equipped-loadout triple [defindex, classNum, slot] as stored on a snapshot */
+type Triple = [number, number, number];
+
 interface Snap {
   fetchedAt: Date;
-  classSecs: Map<number, number>;
+  classStats: Map<number, ClassStatsRow>;
+  /** the equipped loadout at this instant, or null when not captured */
+  loadout: Triple[] | null;
 }
 interface AttrSeg {
   startedAt: number;
@@ -222,44 +227,76 @@ interface AttrSeg {
   map: string;
 }
 
-/** payload (jsonb name→value) → per-class playtime seconds via parseClassStats. */
-function classSecsFromPayload(payload: unknown): Map<number, number> {
+/** payload (jsonb name→value) → per-class accum stats via parseClassStats. */
+function classStatsFromPayload(payload: unknown): Map<number, ClassStatsRow> {
   const stats = new Map<string, number>();
   for (const [k, v] of Object.entries((payload ?? {}) as Record<string, unknown>)) {
     stats.set(k, Number(v));
   }
-  const secs = new Map<number, number>();
-  for (const row of parseClassStats(stats)) secs.set(row.classNum, row.playtimeSeconds);
-  return secs;
+  const out = new Map<number, ClassStatsRow>();
+  for (const row of parseClassStats(stats)) out.set(row.classNum, row);
+  return out;
 }
 
+/** loadout jsonb ([[defindex,class,slot],...]) → typed triples, null when absent. */
+function parseLoadout(raw: unknown): Triple[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: Triple[] = [];
+  for (const t of raw) {
+    if (Array.isArray(t)) out.push([num(t[0]), num(t[1]), num(t[2])]);
+  }
+  return out;
+}
+
+/** slot<=6 weapon triples equipped by one class, as "defindex:slot" keys. */
+function weaponSlotKeys(loadout: Triple[], classNum: number): Set<string> {
+  const keys = new Set<string>();
+  for (const [defindex, cls, slot] of loadout) {
+    if (cls === classNum && slot <= 6) keys.add(`${defindex}:${slot}`);
+  }
+  return keys;
+}
+
+const setsEqual = (a: Set<string>, b: Set<string>): boolean =>
+  a.size === b.size && [...a].every((v) => b.has(v));
+
+/** positive-only delta between two accum values (per-stat reset guard). */
+const posDelta = (cur: number | undefined, prev: number | undefined): number =>
+  Math.max(0, (cur ?? 0) - (prev ?? 0));
+
 /**
- * Build/refresh stat_windows for every attributed player over the trailing
- * WINDOW_LOOKBACK_DAYS. Scoped to attributed players because only their windows
- * feed map_class_playtime (an un-attributed player's window carries no map).
+ * Build/refresh stat_windows over the trailing WINDOW_LOOKBACK_DAYS. Scoped to
+ * ALL active players with consecutive snapshot pairs (not just attributed ones)
+ * so window_perf covers the full corpus — an un-attributed player's window
+ * simply carries no map (pure_map stays false), leaving map_class_playtime, which
+ * only sums pure-map windows, unaffected. Per-map attribution still needs
+ * segment_attributions; those are fetched per player and are empty for
+ * un-attributed players.
  */
 async function buildStatWindows(): Promise<void> {
   const players = (await db.execute(sql`
-    select distinct sa.steamid
-    from segment_attributions sa
-    join match_segments ms on ms.id = sa.segment_id
-    where ms.ended_at > now() - make_interval(days => ${WINDOW_LOOKBACK_DAYS})
+    select steamid
+    from player_stat_snapshots
+    where fetched_at > now() - make_interval(days => ${WINDOW_LOOKBACK_DAYS})
+    group by steamid
+    having count(*) >= 2
   `)) as unknown as { steamid: string }[];
 
   let windows = 0;
   for (const { steamid } of players) {
     const snapRows = (await db.execute(sql`
-      select fetched_at, payload
+      select fetched_at, payload, loadout
       from player_stat_snapshots
       where steamid = ${steamid}
         and fetched_at > now() - make_interval(days => ${WINDOW_LOOKBACK_DAYS})
       order by fetched_at asc
-    `)) as unknown as { fetched_at: string | Date; payload: unknown }[];
+    `)) as unknown as { fetched_at: string | Date; payload: unknown; loadout: unknown }[];
     if (snapRows.length < 2) continue;
 
     const snaps: Snap[] = snapRows.map((r) => ({
       fetchedAt: new Date(r.fetched_at),
-      classSecs: classSecsFromPayload(r.payload),
+      classStats: classStatsFromPayload(r.payload),
+      loadout: parseLoadout(r.loadout),
     }));
 
     // attributed segments for this player, to decide pure-map per window
@@ -281,18 +318,41 @@ async function buildStatWindows(): Promise<void> {
       if (!prev || !cur) continue;
 
       const classDeltas: Record<string, number> = {};
+      const statDeltas: Record<string, Record<string, number>> = {};
       let reset = false;
       let positiveClasses = 0;
       let playtimeDeltaSec = 0;
+      // loadout is "stable" only if both endpoints captured it AND every moved
+      // class ran the same slot<=6 weapons at both ends
+      let loadoutStable = prev.loadout !== null && cur.loadout !== null;
       for (let cn = 1; cn <= 9; cn++) {
-        const delta = (cur.classSecs.get(cn) ?? 0) - (prev.classSecs.get(cn) ?? 0);
+        const prevStats = prev.classStats.get(cn);
+        const curStats = cur.classStats.get(cn);
+        const delta = (curStats?.playtimeSeconds ?? 0) - (prevStats?.playtimeSeconds ?? 0);
         if (delta < 0) reset = true;
         if (delta > 0) {
           classDeltas[String(cn)] = delta;
           positiveClasses += 1;
           playtimeDeltaSec += delta;
+          // other accum stats gained by this moved class (positive-only guard)
+          statDeltas[String(cn)] = {
+            kills: posDelta(curStats?.kills, prevStats?.kills),
+            assists: posDelta(curStats?.killAssists, prevStats?.killAssists),
+            damage: posDelta(curStats?.damageDealt, prevStats?.damageDealt),
+            points: posDelta(curStats?.pointsScored, prevStats?.pointsScored),
+            dominations: posDelta(curStats?.dominations, prevStats?.dominations),
+            captures: posDelta(curStats?.captures, prevStats?.captures),
+            defenses: posDelta(curStats?.defenses, prevStats?.defenses),
+          };
+          if (loadoutStable && prev.loadout && cur.loadout) {
+            const a = weaponSlotKeys(prev.loadout, cn);
+            const b = weaponSlotKeys(cur.loadout, cn);
+            if (!setsEqual(a, b)) loadoutStable = false;
+          }
         }
       }
+      // END snapshot's loadout, null unless both endpoints captured one
+      const loadout = prev.loadout !== null && cur.loadout !== null ? cur.loadout : null;
 
       // pure-map: attributed segments overlapping [prev, cur) span exactly one map
       const winStart = prev.fetchedAt.getTime() / 1000;
@@ -317,6 +377,9 @@ async function buildStatWindows(): Promise<void> {
           pureClass: positiveClasses === 1,
           map,
           classDeltas,
+          statDeltas,
+          loadout,
+          loadoutStable,
         })
         .onConflictDoUpdate({
           target: [
@@ -332,6 +395,9 @@ async function buildStatWindows(): Promise<void> {
             pureClass: positiveClasses === 1,
             map,
             classDeltas,
+            statDeltas,
+            loadout,
+            loadoutStable,
             computedAt: new Date(),
           },
         });

@@ -18,11 +18,13 @@ import {
   type PerfItemInfo,
   performanceFiltersSchema,
   performanceInfiniteQueryOptions,
+  type Source,
   type Subject,
 } from "#/server/performance";
 
 const DEFAULT_FILTERS = {
   subject: "items",
+  source: "lifetime",
   metric: "points_hr",
   class: -1,
   slot: -1,
@@ -55,6 +57,11 @@ const SUBJECT_LABELS: Record<Subject, string> = {
   items: "Items",
   combo2: "2-weapon",
   combo3: "3-weapon",
+};
+
+const SOURCE_LABELS: Record<Source, string> = {
+  lifetime: "Lifetime",
+  session: "Session",
 };
 
 const METRIC_ORDER = Object.keys(METRICS) as MetricKey[];
@@ -241,10 +248,22 @@ function PerformancePage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
         <h1 className="font-heading text-2xl font-bold">Weapon performance</h1>
         <p className="text-[11px] text-muted-foreground sm:max-w-md sm:text-right">
-          Correlational. Each value is the median {metric.label.toLowerCase()} of players who equip
-          the item, not the weapon's isolated effect. Median + a per-player cap keep farming-server
-          outliers out. Medians aren't significance-tested (no per-group variance is stored); rows
-          with under {LOW_SAMPLE} equippers are de-emphasized.
+          {search.source === "session" ? (
+            <>
+              Session. Each value is the median {metric.label.toLowerCase()} measured during windows
+              where the weapon set was equipped (accruing) — deltas between crawls, not whole-career
+              rates. Forward-accruing and thin until data builds. Per-window rates are medianed
+              (never summed); a per-window cap keeps outliers out. Rows with under {LOW_SAMPLE}{" "}
+              players are de-emphasized.
+            </>
+          ) : (
+            <>
+              Correlational. Each value is the median {metric.label.toLowerCase()} of players who
+              equip the item, not the weapon's isolated effect. Median + a per-player cap keep
+              farming-server outliers out. Medians aren't significance-tested (no per-group variance
+              is stored); rows with under {LOW_SAMPLE} equippers are de-emphasized.
+            </>
+          )}
         </p>
       </div>
 
@@ -259,6 +278,25 @@ function PerformancePage() {
           </Segmented>
         </FilterRow>
 
+        <FilterRow label="Source">
+          <Segmented>
+            <Segment
+              active={search.source === "lifetime"}
+              patch={{ source: "lifetime" }}
+              title="Whole-career per-class rates of players who equip it (correlational)"
+            >
+              {SOURCE_LABELS.lifetime}
+            </Segment>
+            <Segment
+              active={search.source === "session"}
+              patch={{ source: "session" }}
+              title="Measured during equipped windows (accruing) — forward-accruing, thin until data builds"
+            >
+              {SOURCE_LABELS.session}
+            </Segment>
+          </Segmented>
+        </FilterRow>
+
         <FilterRow label="Metric">
           <Segmented>
             {METRIC_ORDER.map((key) => (
@@ -269,7 +307,7 @@ function PerformancePage() {
           </Segmented>
         </FilterRow>
 
-        {search.subject === "items" && (
+        {search.subject === "items" && search.source === "lifetime" && (
           <FilterRow label="Reskins">
             <Segmented>
               <Segment
@@ -312,7 +350,7 @@ function PerformancePage() {
           </Segmented>
         </FilterRow>
 
-        {search.subject === "items" && (
+        {search.subject === "items" && search.source === "lifetime" && (
           <FilterRow label="Slot">
             <Segmented>
               <Segment active={search.slot === -1} patch={{ slot: -1 }}>

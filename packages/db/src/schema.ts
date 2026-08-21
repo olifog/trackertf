@@ -510,7 +510,10 @@ export const segmentAttributions = pgTable(
  *    delta is attributable to that map.
  *  - pure_class: exactly one class's playtime advanced in the window.
  * classDeltas holds per-class playtime SECONDS gained ({ "<classNum>": seconds }),
- * positive deltas only. Written/upserted by apps/crawler/src/attributor.ts.
+ * positive deltas only. statDeltas holds the other accum stats gained per moved
+ * class, and loadout/loadoutStable let window_perf attribute those gains to the
+ * weapons equipped through the window. Written/upserted by
+ * apps/crawler/src/attributor.ts.
  */
 export const statWindows = pgTable(
   "stat_windows",
@@ -531,6 +534,16 @@ export const statWindows = pgTable(
     map: text(),
     /** per-class playtime seconds gained, { "<classNum>": seconds } (positive only) */
     classDeltas: jsonb("class_deltas").notNull(),
+    /** per moved class, positive-only accum-stat gains (playtime lives in
+     * class_deltas), same reset guard: { "<classNum>": { kills, assists, damage,
+     * points, dominations, captures, defenses } } */
+    statDeltas: jsonb("stat_deltas").notNull().default({}),
+    /** the END snapshot's equipped loadout triples ([[defindex,class,slot],...]);
+     * null when either endpoint snapshot had no loadout captured */
+    loadout: jsonb(),
+    /** for every moved class the slot<=6 weapon triples were identical at both
+     * endpoints, so the window's stat gains map to a stable weapon set */
+    loadoutStable: boolean("loadout_stable").notNull().default(false),
     computedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

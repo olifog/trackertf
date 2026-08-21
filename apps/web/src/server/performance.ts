@@ -35,42 +35,49 @@ export const METRICS = {
     label: "Points/hr",
     unit: "pts/hr",
     expr: "toFloat64(p.points_scored) * 3600 / p.playtime_seconds",
+    sessionExpr: "toFloat64(w.points) * 3600 / w.playtime_sec",
     cap: 5_000,
   },
   points_min: {
     label: "Points/min",
     unit: "pts/min",
     expr: "toFloat64(p.points_scored) * 60 / p.playtime_seconds",
+    sessionExpr: "toFloat64(w.points) * 60 / w.playtime_sec",
     cap: 100,
   },
   kills_hr: {
     label: "Kills/hr",
     unit: "kills/hr",
     expr: "toFloat64(p.kills) * 3600 / p.playtime_seconds",
+    sessionExpr: "toFloat64(w.kills) * 3600 / w.playtime_sec",
     cap: 500,
   },
   damage_min: {
     label: "Damage/min",
     unit: "dmg/min",
     expr: "toFloat64(p.damage_dealt) * 60 / p.playtime_seconds",
+    sessionExpr: "toFloat64(w.damage) * 60 / w.playtime_sec",
     cap: 10_000,
   },
   assists_hr: {
     label: "Assists/hr",
     unit: "ast/hr",
     expr: "toFloat64(p.kill_assists) * 3600 / p.playtime_seconds",
+    sessionExpr: "toFloat64(w.assists) * 3600 / w.playtime_sec",
     cap: 500,
   },
   captures_hr: {
     label: "Captures/hr",
     unit: "caps/hr",
     expr: "toFloat64(p.captures) * 3600 / p.playtime_seconds",
+    sessionExpr: "toFloat64(w.captures) * 3600 / w.playtime_sec",
     cap: 500,
   },
   dominations_hr: {
     label: "Dominations/hr",
     unit: "doms/hr",
     expr: "toFloat64(p.dominations) * 3600 / p.playtime_seconds",
+    sessionExpr: "toFloat64(w.dominations) * 3600 / w.playtime_sec",
     cap: 500,
   },
 } as const;
@@ -81,10 +88,19 @@ const METRIC_KEYS = Object.keys(METRICS) as [MetricKey, ...MetricKey[]];
 export const SUBJECTS = ["items", "combo2", "combo3"] as const;
 export type Subject = (typeof SUBJECTS)[number];
 
+export const SOURCES = ["lifetime", "session"] as const;
+export type Source = (typeof SOURCES)[number];
+
 /** Every performance-page filter lives in the URL — this schema is the contract. */
 export const performanceFiltersSchema = z.object({
   /** items = single weapon group; combo2/combo3 = 2/3-weapon loadouts */
   subject: z.enum(SUBJECTS).catch("items").default("items"),
+  /**
+   * lifetime = correlational, over a player's whole-career per-class rates (the
+   * styletf model). session = causal-leaning, over window_perf deltas measured
+   * while the weapon set was equipped (forward-accruing, thin until data builds).
+   */
+  source: z.enum(SOURCES).catch("lifetime").default("lifetime"),
   /** which averaged metric to rank by */
   metric: z.enum(METRIC_KEYS).catch("points_hr").default("points_hr"),
   /** -1 = overall (all classes), 1-9 = Web API class number */
@@ -142,6 +158,10 @@ const PAGE_SIZE = 50;
 /** noise floor: >= 10h on the class, >= 5 equippers per group */
 const MIN_PLAYTIME_SECONDS = 36_000;
 const MIN_PLAYERS = 5;
+/** session mode: a window must span >= 10 min of class playtime to carry signal,
+ * and a weapon group needs >= 10h of measured window time across >= 5 players */
+const MIN_WINDOW_SECONDS = 600;
+const SESSION_MIN_PLAYTIME_SECONDS = 36_000;
 
 /**
  * PDA/builder pseudo-items (~every player of a class "equips" them). Excluded
@@ -210,6 +230,9 @@ function baseParams(
     minPlaytime: MIN_PLAYTIME_SECONDS,
     minMinutes: filters.minutes,
     minPlayers: MIN_PLAYERS,
+    // session-only floors (harmless extra params for the lifetime queries)
+    minWindowSec: MIN_WINDOW_SECONDS,
+    minWindowPlaytime: SESSION_MIN_PLAYTIME_SECONDS,
     cap: METRICS[filters.metric].cap,
     limit: PAGE_SIZE + 1,
     offset,
@@ -319,6 +342,61 @@ async function queryCombos(
   return rows;
 }
 
+/**
+ * SESSION PERFORMANCE: instead of a player's whole-career rate, aggregate over
+ * window_perf — the per-stat deltas a player accrued while a STABLE weapon set
+ * was equipped (loadout_stable = 1). ARRAY JOINs weapon_gids exactly like the
+ * combo machinery (size 1 = single weapon = items; 2/3 = combos), takes the
+ * MEDIAN of the per-window rate over windows (never sums raw counts across
+ * windows — thin windows would dominate), with the same per-window metric cap.
+ *
+ * Extra gates vs lifetime: each window must span >= {minWindowSec} of class
+ * playtime, and a group needs >= {minWindowPlaytime} of measured window seconds
+ * across >= {minPlayers} distinct players. Forward-accruing: sparse until the
+ * crawler has revisited players across changing loadouts. Slot/reskin filters
+ * don't apply (weapon_gids are already slot<=6 cgids).
+ */
+async function querySession(
+  filters: PerformanceFilters,
+  offset: number,
+  size: 1 | 2 | 3,
+  pdaGids: number[],
+): Promise<ComboAgg[]> {
+  const metric = METRICS[filters.metric].sessionExpr;
+  const letters = size === 3 ? ["a", "b", "c"] : size === 2 ? ["a", "b"] : ["a"];
+  const joins = letters.map((l) => `array join w.weapon_gids as ${l}`).join("\n     ");
+  const members = `[${letters.join(", ")}]`;
+  const groupCols = letters.join(", ");
+  // strict-ascending guard (multi-weapon only) + drop combos formed from a PDA
+  const pdaFilter = letters.map((l) => `${l} not in {pdas:Array(UInt32)}`).join(" and ");
+  const asc = size === 3 ? "a < b and b < c" : size === 2 ? "a < b" : null;
+  const guard = [asc, pdaFilter].filter(Boolean).join(" and ");
+  const orderCols = `value desc, ${letters.map((l) => `${l} asc`).join(", ")}`;
+  const rows = await chQuery<ComboAgg>(
+    getCh(),
+    `select
+       ${members} as members,
+       quantileExact(0.5)(${metric}) as value,
+       toUInt32(count(distinct w.steamid)) as players,
+       sum(w.playtime_sec) / 3600 / toFloat64(count(distinct w.steamid)) as avg_hours
+     from window_perf w
+     ${joins}
+     where ${guard}
+       and w.loadout_stable = 1
+       and w.playtime_sec >= {minWindowSec:UInt32}
+       and w.lifetime_min >= {minMinutes:UInt32}
+       and (${metric}) <= {cap:Float64}
+       ${classClause(filters.class, "w.class_num")}
+     group by ${groupCols}
+     having sum(w.playtime_sec) >= {minWindowPlaytime:UInt64}
+       and toUInt32(count(distinct w.steamid)) >= {minPlayers:UInt32}
+     order by ${orderCols}
+     limit {limit:UInt32} offset {offset:UInt32}`,
+    baseParams(filters, offset, pdaGids),
+  );
+  return rows;
+}
+
 /** resolve cgid representative defindexes to item names/icons via Postgres */
 async function resolveItems(defindexes: number[]): Promise<Map<number, PerfItemInfo>> {
   const map = new Map<number, PerfItemInfo>();
@@ -342,11 +420,14 @@ export const fetchPerformance = createServerFn({ method: "GET" })
   .handler(async ({ data }): Promise<PerfPage> => {
     const { offset, ...filters } = data;
     const pdaGids = await fetchPdaGids();
+    const size = filters.subject === "combo3" ? 3 : filters.subject === "combo2" ? 2 : 1;
     // over-fetch one row to learn whether another page exists
     const raw =
-      filters.subject === "items"
-        ? await queryItems(filters, offset, pdaGids)
-        : await queryCombos(filters, offset, filters.subject === "combo3" ? 3 : 2, pdaGids);
+      filters.source === "session"
+        ? await querySession(filters, offset, size, pdaGids)
+        : filters.subject === "items"
+          ? await queryItems(filters, offset, pdaGids)
+          : await queryCombos(filters, offset, size === 3 ? 3 : 2, pdaGids);
     const page = raw.slice(0, PAGE_SIZE);
 
     const ids = [...new Set(page.flatMap((r) => r.members))];

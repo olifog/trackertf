@@ -55,6 +55,30 @@ export const CH_SCHEMA: Record<string, string> = {
     active_2wk_min UInt32
   ) ENGINE = MergeTree ORDER BY (class_num, steamid)`,
 
+  // one row per (stat window, moved class): the accum stats a player gained
+  // while equipping a stable weapon set, for forward "session" performance.
+  // weapon_gids folds the class's slot<=6 loadout into cgids like `loadout`.
+  window_perf: `(
+    steamid UInt64,
+    class_num UInt8,
+    ended_at DateTime,
+    playtime_sec UInt32,
+    kills UInt32,
+    assists UInt32,
+    damage UInt64,
+    points UInt32,
+    dominations UInt32,
+    captures UInt32,
+    defenses UInt32,
+    weapon_gids Array(UInt32),
+    loadout_stable UInt8,
+    pure_class UInt8,
+    pure_map UInt8,
+    map String,
+    lifetime_min UInt32,
+    active_2wk_min UInt32
+  ) ENGINE = MergeTree ORDER BY (class_num, ended_at, steamid)`,
+
   // sampler-observed per-player score trajectories inside casual match segments
   match_obs: `(
     segment_id UInt64,
