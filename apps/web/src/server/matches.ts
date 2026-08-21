@@ -46,19 +46,21 @@ export const fetchRecentSegments = createServerFn({ method: "GET" })
       `select toString(segment_id) as segment_id,
         any(map) as map,
         any(region) as region,
-        toUnixTimestamp(any(started_at)) as started_at,
+        toUnixTimestamp(any(started_at)) as started_unix,
         toUnixTimestamp(max(last_seen)) as ended_at,
         toUInt32(count()) as participants,
         toUInt32(max(observations)) as rounds
       from match_obs
+      -- WHERE references the raw column (scan bound); the SELECT alias must NOT
+      -- be named started_at or CH binds it here to the any() aggregate and errors
       where started_at > now() - toIntervalDay(30)
       group by segment_id
-      order by started_at desc
+      order by started_unix desc
       limit {limit:UInt32}`,
       { limit: data.limit },
     );
     return rows.map((r: Record<string, unknown>) => {
-      const startedAt = num(r["started_at"]);
+      const startedAt = num(r["started_unix"]);
       const endedAt = num(r["ended_at"]);
       return {
         segmentId: String(r["segment_id"]),
