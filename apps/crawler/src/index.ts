@@ -10,6 +10,19 @@ const steam = createBudgetedSteamClient(db, "crawler");
 
 /** Queue expansion mirrors styletf: active, high-hours players spread the BFS. */
 const EXPAND_MIN_MINUTES = 100_000;
+/**
+ * Friend fan-out is subsampled per expander. Unbounded fan-out lets a single
+ * mega-account (thousands of friends) flood the frontier and bias discovery
+ * toward its social cluster; capping keeps the BFS breadth-first. K scales with
+ * the expander's lifetime hours (more-invested players seed better leads) and is
+ * throttled down for over-represented countries (see countryFanoutFactor).
+ */
+const MIN_FANOUT = 5;
+const MAX_FANOUT = 30;
+const FANOUT_BASE = 12;
+/** Country-share throttle: at/under TARGET_SHARE a country expands freely. */
+const TARGET_SHARE = 0.15;
+const COUNTRY_SHARE_TTL_MS = 10 * 60_000;
 const LOCK_MINUTES = 10;
 const MAX_ATTEMPTS = 3;
 const CONCURRENCY = Number(process.env["CRAWLER_CONCURRENCY"] ?? 6);
@@ -115,6 +128,63 @@ async function enqueueFriends(steamids: readonly string[]): Promise<void> {
     where not exists (select 1 from players p where p.steamid = t.steamid)
     on conflict (steamid) do nothing
   `);
+}
+
+/** Clamp to an inclusive range. */
+function clamp(x: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, x));
+}
+
+/**
+ * Fisher–Yates shuffle (new array). Used to subsample friends without
+ * steamid-ordering bias — a head-slice would over-pick the same steamid range.
+ */
+function shuffle<T>(items: readonly T[]): T[] {
+  const out = items.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
+
+/**
+ * In-memory country-share cache, refreshed lazily by TTL. Built from the same
+ * POP-filtered aggregate the /health page uses so expansion throttling tracks
+ * the corpus it's rebalancing. Reading players.loccountrycode later is a plain
+ * column read (no Steam API call), so the throttle stays off the crawl budget.
+ */
+let countryShare = new Map<string, number>();
+let countryShareRefreshedAt = 0;
+
+async function refreshCountryShare(): Promise<void> {
+  if (Date.now() - countryShareRefreshedAt < COUNTRY_SHARE_TTL_MS) return;
+  countryShareRefreshedAt = Date.now();
+  const rows = (await db.execute(sql`
+    select loccountrycode as cc, count(*) as n
+    from players
+    where loccountrycode is not null
+      and personaname is not null
+      and vac_banned = false
+      and coalesce(botness, 0) < 0.5
+    group by loccountrycode
+  `)) as unknown as Record<string, unknown>[];
+  let total = 0;
+  for (const r of rows) total += Number(r["n"]);
+  const next = new Map<string, number>();
+  if (total > 0) for (const r of rows) next.set(String(r["cc"]), Number(r["n"]) / total);
+  countryShare = next;
+}
+
+/**
+ * Down-weight fan-out for over-represented countries: at/under TARGET_SHARE the
+ * factor is 1 (no throttle); above it it falls off ∝ target/share, floored at
+ * 0.25 so no country is fully starved. Null country → no signal → factor 1.
+ */
+function countryFanoutFactor(cc: string | null): number {
+  if (cc === null) return 1;
+  const share = countryShare.get(cc) ?? 0;
+  return clamp(TARGET_SHARE / Math.max(share, TARGET_SHARE), 0.25, 1.0);
 }
 
 /** Exhausted frontier rows become error-status players instead of zombies. */
@@ -301,7 +371,27 @@ async function crawlOne({ steamid, source }: FrontierItem): Promise<void> {
           target: schema.playerFriendsRaw.steamid,
           set: { fetchedAt, payload: friends.data },
         });
-      await enqueueFriends(friends.data.map((f) => f.steamid));
+
+      // Fan-out cap: value-scale K by the expander's lifetime hours, then throttle
+      // by its country's share of the corpus. The FULL friend list is persisted
+      // above (the graph edge stays complete); only the ENQUEUE is subsampled.
+      await refreshCountryShare();
+      const [self] = await db
+        .select({ cc: schema.players.loccountrycode })
+        .from(schema.players)
+        .where(eq(schema.players.steamid, steamid))
+        .limit(1);
+      const valueScaledK = clamp(
+        Math.round(FANOUT_BASE * Math.log2(playtime.data.minutes / EXPAND_MIN_MINUTES + 1)),
+        MIN_FANOUT,
+        MAX_FANOUT,
+      );
+      const k = clamp(
+        Math.round(valueScaledK * countryFanoutFactor(self?.cc ?? null)),
+        MIN_FANOUT,
+        MAX_FANOUT,
+      );
+      await enqueueFriends(shuffle(friends.data.map((f) => f.steamid)).slice(0, k));
     }
   }
 }
@@ -310,21 +400,36 @@ async function crawlOne({ steamid, source }: FrontierItem): Promise<void> {
  * Cohort-based recrawl scheduling (delta design doc §2):
  *  A "hyper"  — active in last 2 weeks → every 8h (session-resolution windows)
  *  C rotation — rest of the public-stats corpus → every 14d
- * Recrawls run at priority 1: above the (endless) friend-BFS backlog, below manual seeds — the scheduler cap keeps discovery fed.
+ * Two tiers so high-hours actives don't get starved by the flat backlog: the
+ * active tier enqueues at priority 2 ordered by lifetime hours desc (biggest
+ * time-sinks first, session windows stay tight), the fairness tier at priority 1
+ * ordered by last_crawled asc (starvation guard for the long tail). Recrawls
+ * still sit above the (endless) friend-BFS backlog and below manual seeds — the
+ * per-tier caps keep discovery fed.
  */
 async function scheduleRecrawls(): Promise<void> {
   await db.execute(sql`
     insert into crawl_frontier (steamid, source, priority)
-    select p.steamid, 'recrawl'::frontier_source, 1
-    from players p
-    where p.stats_status = 'ok'
-      and not exists (select 1 from crawl_frontier f where f.steamid = p.steamid)
-      and (
-        (coalesce(p.tf2_minutes_2wk, 0) > 0 and p.last_crawled < now() - interval '8 hours')
-        or p.last_crawled < now() - interval '14 days'
-      )
-    order by p.last_crawled asc
-    limit 2000
+    select steamid, 'recrawl'::frontier_source, priority from (
+      select p.steamid, 2 as priority
+      from players p
+      where p.stats_status = 'ok'
+        and coalesce(p.tf2_minutes_2wk, 0) > 0
+        and p.last_crawled < now() - interval '8 hours'
+        and not exists (select 1 from crawl_frontier f where f.steamid = p.steamid)
+      order by coalesce(p.tf2_minutes, 0) desc, p.last_crawled asc
+      limit 1500
+    ) active
+    union all
+    select steamid, 'recrawl'::frontier_source, priority from (
+      select p.steamid, 1 as priority
+      from players p
+      where p.stats_status = 'ok'
+        and p.last_crawled < now() - interval '14 days'
+        and not exists (select 1 from crawl_frontier f where f.steamid = p.steamid)
+      order by p.last_crawled asc
+      limit 500
+    ) fairness
     on conflict (steamid) do nothing
   `);
 }
