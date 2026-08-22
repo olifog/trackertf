@@ -16,13 +16,16 @@ function EcoLayout() {
   return (
     <div className="space-y-6">
       <div className="-mx-4 overflow-x-auto border-b px-4 sm:mx-0 sm:px-0">
-        <nav className="flex items-center gap-5 pb-2">
+        <nav className="flex items-center gap-1">
           {ECO_TABS.map((tab) => (
             <Link
               key={tab.to}
               to={tab.to}
-              className="shrink-0 text-sm text-muted-foreground hover:text-foreground"
-              activeProps={{ className: "shrink-0 text-sm font-semibold text-foreground" }}
+              className="-mb-px shrink-0 border-b-2 border-transparent px-3 pb-2 pt-1 text-sm text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+              activeProps={{
+                className:
+                  "-mb-px shrink-0 border-b-2 border-primary px-3 pb-2 pt-1 text-sm font-semibold text-foreground",
+              }}
             >
               {tab.label}
             </Link>
