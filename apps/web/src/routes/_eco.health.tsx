@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
@@ -15,11 +16,12 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { InfoTip } from "#/components/ui/info-tip";
 import { countryFlag, countryName } from "#/lib/geo";
 import { CLASS_NAMES, formatAgo } from "#/lib/tf2";
 import { healthQueryOptions } from "#/server/health";
 
-export const Route = createFileRoute("/health")({
+export const Route = createFileRoute("/_eco/health")({
   loader: ({ context }) => context.queryClient.ensureQueryData(healthQueryOptions()),
   component: DataPage,
 });
@@ -32,7 +34,7 @@ function fmtCompact(n: number): string {
   return n.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Stat({ label, value, sub }: { label: ReactNode; value: string; sub?: string }) {
   return (
     <div className="rounded-lg border bg-card/50 px-4 py-3">
       <div className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">
@@ -133,7 +135,12 @@ function DataPage() {
             sub="highest concurrent"
           />
           <Stat
-            label="est. casual players"
+            label={
+              <span className="inline-flex items-center gap-1">
+                est. casual players
+                <InfoTip text="Chapman mark-recapture from sampled casual names. Order-of-magnitude only." />
+              </span>
+            }
             value={
               population.estimatedCasual14d === null
                 ? "—"
@@ -147,19 +154,11 @@ function DataPage() {
             sub="of est. active casual"
           />
         </div>
-        <p className="mt-2 max-w-2xl text-xs text-muted-foreground">
-          Playerbase size is a mark-recapture estimate (Chapman) from distinct in-game names our
-          sampler saw across two 7-day windows — it covers only the Valve casual servers we watch
-          and is deflated by name collisions, so treat it as an order-of-magnitude figure. Coverage
-          compares our profiles active in the last 2 weeks against that estimate.
-        </p>
       </div>
 
       <div className="rounded-lg border bg-card/50 p-4">
         <h2 className="font-heading text-lg font-semibold">Class playtime</h2>
-        <p className="mb-2 text-xs text-muted-foreground">
-          total lifetime hours per class across the crawled corpus
-        </p>
+        <p className="mb-2 text-xs text-muted-foreground">Lifetime hours per class.</p>
         {classBars.length === 0 ? (
           <div className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
             No class stats crawled yet.
@@ -209,18 +208,14 @@ function DataPage() {
             />
           ))}
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          A weighted-fair lottery picks a source each draw, then the best row within it (priority
-          then age) — player-requested recrawls jump ahead of the scheduler's own, new-player seeds
-          ahead of both. Friend expansion is the only self-sustaining source.
-        </p>
       </div>
 
       {budget.length > 0 && (
         <div>
-          <h2 className="mb-2 font-heading text-lg font-semibold">
+          <h2 className="mb-2 flex items-center gap-1.5 font-heading text-lg font-semibold">
             Steam API budget{" "}
             <span className="text-sm text-muted-foreground">(rate-limit buckets)</span>
+            <InfoTip text="tokens = headroom now; /s = sustained refill. Red = at ceiling." />
           </h2>
           <div className="grid gap-x-6 gap-y-2 rounded-lg border bg-card/50 p-4 sm:grid-cols-2">
             {budget.map((b) => {
@@ -257,8 +252,7 @@ function DataPage() {
       <div className="rounded-lg border bg-card/50 p-4">
         <h2 className="font-heading text-lg font-semibold">Players by country</h2>
         <p className="mb-3 text-xs text-muted-foreground">
-          Where crawled players are from — {countryKnown.toLocaleString()} profiles expose a public
-          country (public, non-VAC, non-bot). Top {countries.length}.
+          {countryKnown.toLocaleString()} profiles with a public country. Top {countries.length}.
         </p>
         {countries.length === 0 ? (
           <p className="text-sm text-muted-foreground">No country data yet.</p>
@@ -289,8 +283,9 @@ function DataPage() {
       </div>
 
       <div>
-        <h2 className="mb-2 font-heading text-lg font-semibold">
+        <h2 className="mb-2 flex items-center gap-1.5 font-heading text-lg font-semibold">
           Steam API outcomes <span className="text-sm text-muted-foreground">(last 48h)</span>
+          <InfoTip text='"Private" = data hidden by privacy settings. Persistent 503s are counted as errors.' />
         </h2>
         <Table>
           <TableHeader>
@@ -344,12 +339,6 @@ function DataPage() {
           </TableBody>
         </Table>
       </div>
-
-      <p className="text-xs text-muted-foreground">
-        "Private" is data that exists but isn't visible to us (privacy settings). Persistent
-        GetPlayerItems 503s are counted there after 3 spaced retries, so brief Game Coordinator
-        outages appear under errors instead.
-      </p>
     </div>
   );
 }

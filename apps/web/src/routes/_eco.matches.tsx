@@ -18,6 +18,8 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { InfoTip } from "#/components/ui/info-tip";
+import { NOT_ENOUGH_DATA } from "#/lib/copy";
 import { avatarUrl } from "#/lib/tf2";
 import { type DurationRow, matchDurationsQueryOptions } from "#/server/matchDurations";
 import { type MapClassRow, mapClassPlaytimeQueryOptions } from "#/server/mapClass";
@@ -45,7 +47,7 @@ import {
 
 const DEFAULT_SEARCH = { days: 3, minObs: 3, minWindowMin: 5 } as const;
 
-export const Route = createFileRoute("/matches")({
+export const Route = createFileRoute("/_eco/matches")({
   validateSearch: matchLeaderFiltersSchema,
   search: { middlewares: [stripSearchParams(DEFAULT_SEARCH)] },
   loaderDeps: ({ search }) => search,
@@ -215,16 +217,15 @@ function CandidatePanel({ segmentId, name }: { segmentId: string; name: string }
   if (!data || data.candidates.length === 0) {
     return (
       <div className="px-4 py-3 text-xs text-muted-foreground">
-        No profile candidates — this display name isn't in the crawled corpus (or is too generic to
-        match).
+        No profile candidates for this name.
       </div>
     );
   }
   return (
     <div className="space-y-2 px-4 py-3">
-      <p className="text-[11px] text-muted-foreground">
-        Probabilistic matches for <span className="font-mono">"{data.observedName}"</span> — ranked
-        by name, recent playtime and stat-snapshot deltas. Never a certain identity.
+      <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        Profile candidates for <span className="font-mono">"{data.observedName}"</span>
+        <InfoTip text="Ranked by name, recent playtime and stat deltas. Not a certain match." />
       </p>
       <div className="grid gap-2 sm:grid-cols-2">
         {data.candidates.slice(0, 8).map((c) => (
@@ -368,13 +369,10 @@ function MatchDurationsSection() {
 
   return (
     <section className="space-y-3">
-      <h2 className="font-heading text-lg font-semibold">How long matches take</h2>
-      <p className="max-w-3xl text-sm text-muted-foreground">
-        Median match length, measured from segments the sampler saw both the start and end of — a
-        match that reset the scoreboard or rolled the map, flowing straight out of the previous one.
-        Truncated segments (we started mid-match, or the server emptied) are excluded, so these are
-        real match durations, not sampling artifacts.
-      </p>
+      <div className="flex items-center gap-1.5">
+        <h2 className="font-heading text-lg font-semibold">How long matches take</h2>
+        <InfoTip text="Median length of matches the sampler saw start-to-finish. Truncated observations excluded." />
+      </div>
 
       {byGamemode.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
@@ -430,8 +428,7 @@ function MatchDurationsSection() {
 
       {!isLoading && byGamemode.length === 0 && (
         <div className="rounded-lg border bg-card/50 p-4 text-sm text-muted-foreground">
-          Not enough completed matches yet — the sampler needs to observe a server through two
-          consecutive match boundaries before a duration counts. Check back soon.
+          {NOT_ENOUGH_DATA}
         </div>
       )}
     </section>
@@ -454,7 +451,7 @@ function AttributedLink({ a }: { a: SegmentAttribution }) {
       params={{ steamid: a.steamid }}
       onClick={(e) => e.stopPropagation()}
       className="ml-1.5 inline-flex max-w-[10rem] items-center gap-1 align-middle rounded bg-primary/10 px-1 py-0.5 text-primary hover:bg-primary/20"
-      title={`Attributed to ${a.personaname ?? a.steamid} — confidence ${(a.confidence * 100).toFixed(0)}%${a.strong ? " (strong)" : ""}. High-confidence match, not a certainty.`}
+      title={`Attributed to ${a.personaname ?? a.steamid} — confidence ${(a.confidence * 100).toFixed(0)}%${a.strong ? " (strong)" : ""}`}
     >
       {avatar ? <img src={avatar} alt="" className="h-3.5 w-3.5 shrink-0 rounded-sm" /> : null}
       <span className="truncate text-[11px] font-medium">→ {a.personaname ?? a.steamid}</span>
@@ -506,12 +503,9 @@ function MapClassSection() {
   return (
     <section className="space-y-3">
       <h2 className="font-heading text-lg font-semibold">Maps</h2>
-      <p className="max-w-3xl text-sm text-muted-foreground">
-        How the class mix shifts map to map. We take each attributed player's per-class playtime
-        gain over windows where all their high-confidence sampled matches sat on one map, and
-        attribute that time to the map. It's inferred, not observed, so it builds up slowly and
-        inherits the name→profile matching uncertainty — read it as a trend, not a census. Click a
-        map for its fastest observed scorers, regulars and more.
+      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+        Class mix by map. Click a map for detail.
+        <InfoTip text="Inferred from attributed players' per-class playtime; a trend, not a census." />
       </p>
 
       {maps.length > 0 && (
@@ -575,9 +569,7 @@ function MapClassSection() {
 
       {!isLoading && maps.length === 0 && (
         <div className="rounded-lg border bg-card/50 p-4 text-sm text-muted-foreground">
-          No attributed map playtime yet — this needs high-confidence player attributions and
-          consecutive stat snapshots that fall on a single map. It accrues as the sampler and
-          crawler run.
+          {NOT_ENOUGH_DATA}
         </div>
       )}
     </section>
@@ -598,7 +590,7 @@ function MapDetailPanel({ map }: { map: string }) {
       <MapClassMix detail={data} />
       <MapScorers scorers={data.topScorers} />
       <MapRegulars regulars={data.regulars} regularCount={data.regularCount} />
-      <MapWeapons weapons={data.weapons} regularCount={data.regularCount} />
+      <MapWeapons weapons={data.weapons} />
     </div>
   );
 }
@@ -684,9 +676,7 @@ function MapScorers({ scorers }: { scorers: MapScorer[] }) {
           </TableBody>
         </Table>
       ) : (
-        <p className="text-xs text-muted-foreground">
-          No scorers observed on this map with a long enough window yet.
-        </p>
+        <p className="text-xs text-muted-foreground">{NOT_ENOUGH_DATA}</p>
       )}
     </div>
   );
@@ -730,29 +720,24 @@ function MapRegulars({
             })}
           </div>
           <p className="text-[11px] text-muted-foreground">
-            {regularCount} profile{regularCount === 1 ? "" : "s"} attributed here (≥ 0.9). ×N =
-            distinct sampled segments on this map. High-confidence matches, not certainties.
+            {regularCount} profile{regularCount === 1 ? "" : "s"} attributed (≥ 0.9). ×N = sampled
+            segments here.
           </p>
         </>
       ) : (
-        <p className="text-xs text-muted-foreground">
-          No high-confidence profile attributions on this map yet.
-        </p>
+        <p className="text-xs text-muted-foreground">{NOT_ENOUGH_DATA}</p>
       )}
     </div>
   );
 }
 
-function MapWeapons({
-  weapons,
-  regularCount,
-}: {
-  weapons: MapWeapon[];
-  regularCount: number;
-}) {
+function MapWeapons({ weapons }: { weapons: MapWeapon[] }) {
   return (
     <div className="space-y-2">
-      <h3 className="text-sm font-semibold">What the regulars run</h3>
+      <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+        What the regulars run
+        <InfoTip text="Global loadouts of this map's regulars, not per-map performance." />
+      </h3>
       {weapons.length > 0 ? (
         <>
           <div className="flex flex-wrap gap-1.5">
@@ -772,17 +757,9 @@ function MapWeapons({
               </span>
             ))}
           </div>
-          <p className="text-[11px] text-muted-foreground">
-            The <em>global</em> loadouts of the profiles attributed to this map — what these players
-            equip overall, not weapon performance on this map (TF2 has no per-map weapon telemetry).
-          </p>
         </>
       ) : (
-        <p className="text-xs text-muted-foreground">
-          {regularCount < 12
-            ? "Too few regulars attributed to this map to summarise their loadouts yet."
-            : "No equipped-loadout data for this map's regulars yet."}
-        </p>
+        <p className="text-xs text-muted-foreground">{NOT_ENOUGH_DATA}</p>
       )}
     </div>
   );
@@ -809,17 +786,9 @@ function MatchesPage() {
 
   return (
     <div className="space-y-8">
-      <div>
+      <div className="flex items-center gap-1.5">
         <h1 className="font-heading text-2xl font-bold">Casual matches</h1>
-        <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-          The sampler repeatedly queries populated Valve casual servers and records each player's
-          score over time. Observed points/hour is measured directly as{" "}
-          <span className="font-mono text-xs">(last score - first score) / hours observed</span>:
-          the real scoring pace on casual, not the farmable Valve lifetime stat. Names are in-game
-          display names — click one to see probabilistic Steam-profile candidates, ranked by name,
-          recent playtime and stat-snapshot deltas. These are never certain: map and region can't
-          disambiguate casual (SDR hides server location), so a shared name may match many profiles.
-        </p>
+        <InfoTip text="Pts/hr = (last − first score) / hours observed on casual. Names are in-game; profile matches are probabilistic." />
       </div>
 
       <CasualSnapshot segments={segments} leaders={leaders} />
@@ -888,7 +857,7 @@ function MatchesPage() {
             {leaders.length === 0 && (
               <TableRow>
                 <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
-                  No participants match these thresholds yet.
+                  No participants match these filters.
                 </TableCell>
               </TableRow>
             )}
@@ -932,7 +901,7 @@ function MatchesPage() {
             {segments.length === 0 && (
               <TableRow>
                 <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
-                  No sampled segments yet. The sampler is warming up.
+                  {NOT_ENOUGH_DATA}
                 </TableCell>
               </TableRow>
             )}

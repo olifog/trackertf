@@ -19,6 +19,8 @@ import {
   TableHeader,
   TableRow,
 } from "#/components/ui/table";
+import { InfoTip } from "#/components/ui/info-tip";
+import { NOT_ENOUGH_DATA } from "#/lib/copy";
 import { formatAgo } from "#/lib/tf2";
 import {
   type ContinentRow,
@@ -37,7 +39,7 @@ const searchSchema = z.object({
   range: trendRangeSchema.catch("24h").default("24h"),
 });
 
-export const Route = createFileRoute("/servers")({
+export const Route = createFileRoute("/_eco/servers")({
   validateSearch: searchSchema,
   search: { middlewares: [stripSearchParams(DEFAULT_SEARCH)] },
   loaderDeps: ({ search }) => search,
@@ -154,7 +156,7 @@ function TrendChart({ points, range }: { points: TrendPoint[]; range: TrendRange
   if (points.length < 2) {
     return (
       <div className="flex h-[260px] items-center justify-center text-sm text-muted-foreground">
-        Not enough history yet. The scanner records a point every 5 minutes.
+        {NOT_ENOUGH_DATA}
       </div>
     );
   }
@@ -213,7 +215,7 @@ function GamemodePie({ data }: { data: { gamemode: GamemodeKey; players: number 
   if (slices.length === 0) {
     return (
       <div className="flex h-[260px] items-center justify-center text-sm text-muted-foreground">
-        No players in the latest scan.
+        {NOT_ENOUGH_DATA}
       </div>
     );
   }
@@ -265,7 +267,7 @@ function TagBars({ tags }: { tags: TagStat[] }) {
   if (data.every((d) => d.count === 0)) {
     return (
       <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
-        No tag data yet. The scanner is collecting it.
+        {NOT_ENOUGH_DATA}
       </div>
     );
   }
@@ -294,7 +296,7 @@ function ContinentPie({ data }: { data: ContinentRow[] }) {
   if (slices.length === 0) {
     return (
       <div className="flex h-[260px] items-center justify-center text-sm text-muted-foreground">
-        No community servers with a resolved region in the latest scan.
+        {NOT_ENOUGH_DATA}
       </div>
     );
   }
@@ -327,7 +329,7 @@ function RushHourChart({
   if (data.length === 0) {
     return (
       <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
-        Not enough history yet.
+        {NOT_ENOUGH_DATA}
       </div>
     );
   }
@@ -383,7 +385,10 @@ function ServersPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h1 className="font-heading text-2xl font-bold">Servers</h1>
+        <div className="flex items-center gap-1.5">
+          <h1 className="font-heading text-2xl font-bold">Servers</h1>
+          <InfoTip text='Latest 5-min GetServerList scan. "Official" = the Valve casual/MvM pool. Empty Valve servers are unmeasurable, and their locations are SDR-hidden ("SDR / unknown").' />
+        </div>
         {overview.scannedAt && (
           <p className="font-mono text-xs text-muted-foreground" suppressHydrationWarning>
             scanned {formatAgo(overview.scannedAt)}
@@ -392,9 +397,7 @@ function ServersPage() {
       </div>
 
       {overview.scannedAt === null ? (
-        <p className="text-muted-foreground">
-          No scans recorded yet. The scanner samples GetServerList every 5 minutes.
-        </p>
+        <p className="text-muted-foreground">{NOT_ENOUGH_DATA}</p>
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -408,11 +411,7 @@ function ServersPage() {
               value={totals.officialPlayers.toLocaleString()}
               sub={`${avgFill.toFixed(1)} avg / server`}
             />
-            <Stat
-              label="community players"
-              value={communityPlayers.toLocaleString()}
-              sub="everything else"
-            />
+            <Stat label="community players" value={communityPlayers.toLocaleString()} />
             <Stat
               label="servers with players"
               value={totals.servers.toLocaleString()}
@@ -422,10 +421,7 @@ function ServersPage() {
 
           <div className="space-y-3 rounded-lg border bg-card/50 p-4">
             <div className="flex items-center justify-between">
-              <div>
-                <h2 className="font-heading text-lg font-semibold">Players over time</h2>
-                <p className="text-xs text-muted-foreground">concurrent players, stacked by gamemode</p>
-              </div>
+              <h2 className="font-heading text-lg font-semibold">Players over time</h2>
               <Segmented>
                 <Segment active={search.range === "24h"} range="24h">
                   24h
@@ -443,10 +439,10 @@ function ServersPage() {
 
           <div className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-lg border bg-card/50 p-4">
-              <h2 className="font-heading text-lg font-semibold">Community occupancy</h2>
-              <p className="mb-3 text-xs text-muted-foreground">
-                populated vs empty community servers, and how full occupied servers are
-              </p>
+              <h2 className="mb-3 flex items-center gap-1.5 font-heading text-lg font-semibold">
+                Community occupancy
+                <InfoTip text="Empty count is community-only; Valve empties are unmeasurable." />
+              </h2>
               <div className="grid grid-cols-2 gap-3">
                 <Stat
                   label="occupied"
@@ -459,17 +455,10 @@ function ServersPage() {
                   sub={`${totals.players.toLocaleString()} / ${totals.capacity.toLocaleString()} seats`}
                 />
               </div>
-              <p className="mt-3 text-[11px] text-muted-foreground">
-                Empty Valve servers are unmeasurable — the master list truncates to 10k phantom
-                matchmaking reservations, so the empty count is community-only.
-              </p>
             </div>
 
             <div className="rounded-lg border bg-card/50 p-4">
-              <h2 className="font-heading text-lg font-semibold">Gametype flags</h2>
-              <p className="mb-2 text-xs text-muted-foreground">
-                populated servers running each modifier (mostly community)
-              </p>
+              <h2 className="mb-2 font-heading text-lg font-semibold">Gametype flags</h2>
               <TagBars tags={tags} />
             </div>
           </div>
@@ -498,18 +487,16 @@ function ServersPage() {
 
             <div className="rounded-lg border bg-card/50 p-4">
               <h2 className="font-heading text-lg font-semibold">Rush hour</h2>
-              <p className="mb-2 text-xs text-muted-foreground">
-                average concurrent players by hour (UTC, trailing 7 days)
-              </p>
+              <p className="mb-2 text-xs text-muted-foreground">UTC, 7d</p>
               <RushHourChart data={rushHour} />
             </div>
           </div>
 
           <div className="rounded-lg border bg-card/50 p-4">
-            <h2 className="font-heading text-lg font-semibold">Community players by continent</h2>
-            <p className="mb-2 text-xs text-muted-foreground">
-              community servers only — Valve casual is SDR-hidden and cannot be geolocated
-            </p>
+            <h2 className="mb-2 flex items-center gap-1.5 font-heading text-lg font-semibold">
+              Community players by continent
+              <InfoTip text="Community servers only — Valve casual is SDR-hidden and can't be geolocated." />
+            </h2>
             <div className="grid items-center gap-6 lg:grid-cols-2">
               <ContinentPie data={byContinent} />
               <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
@@ -614,15 +601,6 @@ function ServersPage() {
               </Table>
             </div>
           </div>
-
-          <p className="text-xs text-muted-foreground">
-            Counts are the latest 5-minute scan of GetServerList. "Official" is the Valve casual/MvM
-            pool (the "valve" gametype tag). Seat fill is players / summed max_players; empty
-            community servers are counted per region, but empty Valve servers are unmeasurable
-            because the master list truncates to 10k phantom reservations. Continents come from Steam
-            master-server region codes, which only community servers still carry — post-2023 Steam
-            Datagram Relay hides Valve servers' real location, so they stay "SDR / unknown".
-          </p>
         </>
       )}
     </div>

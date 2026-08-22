@@ -39,9 +39,7 @@ const NAV_ITEMS = [
   { to: "/combos", label: "Combos" },
   { to: "/performance", label: "Performance" },
   { to: "/leaderboards", label: "Leaderboards" },
-  { to: "/servers", label: "Servers" },
-  { to: "/matches", label: "Matches" },
-  { to: "/health", label: "Data" },
+  { to: "/servers", label: "Ecosystem" },
 ] as const;
 
 function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
