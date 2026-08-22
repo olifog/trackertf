@@ -41,7 +41,7 @@ export const STRANGE_BOARD_KEYS = ["strange:total", "strange:max", "strange:hale
 
 /** kills for a Strange item to reach the top "Hale's Own" rank (mirror of
  * HALE_OWN_KILLS in tf2-schema strange.ts / the player-page inline copy) */
-export const HALE_OWN_KILLS = 10000;
+export const HALE_OWN_KILLS = 8500;
 export type StrangeBoardKey = (typeof STRANGE_BOARD_KEYS)[number];
 const STRANGE_KEY_SET: ReadonlySet<string> = new Set(STRANGE_BOARD_KEYS);
 export const isStrangeBoard = (key: string): key is StrangeBoardKey => STRANGE_KEY_SET.has(key);
@@ -63,7 +63,7 @@ const boardKeySchema = z
  * avatar and the POP filter (public persona, no VAC ban, botness < 0.5 — the
  * same bot/outlier exclusion boards.ts applies to the grid boards).
  * `strange:haleown` ranks players by how many equipped Stranges have hit the
- * top rank (>= 10,000 kills) — a "how many maxed weapons" board.
+ * top rank (>= 8,500 kills) — a "how many maxed weapons" board.
  */
 async function fetchStrangeBoard(board: StrangeBoardKey): Promise<LeaderboardResponse> {
   const agg =

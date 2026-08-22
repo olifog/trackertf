@@ -53,8 +53,8 @@ const CLASS_ORDER = [1, 3, 7, 4, 6, 9, 5, 2, 8];
 // Strange (quality 11) rendering. Mirrors packages/tf2-schema/src/strange.ts —
 // inlined here to avoid adding a cross-package dependency to the web app.
 const STRANGE_QUALITY = 11;
-const HALE_OWN_KILLS = 10000;
-// Kill-eater rank tiers, ascending by min. Top rank is "Hale's Own" at 10000.
+const HALE_OWN_KILLS = 8500;
+// Kill-eater rank tiers, ascending by min. Top rank is "Hale's Own" at 8500.
 const STRANGE_RANKS: readonly { min: number; name: string }[] = [
   { min: 0, name: "Strange" },
   { min: 10, name: "Unremarkable" },
@@ -75,8 +75,8 @@ const STRANGE_RANKS: readonly { min: number; name: string }[] = [
   { min: 2500, name: "Server-Clearing" },
   { min: 5000, name: "Epic" },
   { min: 7500, name: "Legendary" },
-  { min: 8500, name: "Australian" },
-  { min: 10000, name: "Hale's Own" },
+  { min: 7616, name: "Australian" },
+  { min: 8500, name: "Hale's Own" },
 ];
 function strangeRank(kills: number): string {
   let name = STRANGE_RANKS[0]!.name;

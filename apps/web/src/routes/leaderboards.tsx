@@ -60,7 +60,7 @@ const STRANGE_BOARDS: BoardDef[] = [
     metric: "hours",
     scope: "overall",
     kind: "total",
-    label: "Most Hale's Own weapons (equipped Stranges past 10,000 kills)",
+    label: "Most Hale's Own weapons (equipped Stranges past 8,500 kills)",
     shortLabel: "Hale's Own",
     valueLabel: "Hale's Own items",
     decimals: 0,

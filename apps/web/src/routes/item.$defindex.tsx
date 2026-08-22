@@ -303,7 +303,7 @@ function StrangeDistribution({ defindex }: { defindex: number }) {
  * Top players by Strange kill-eater count on this specific defindex. Rendered
  * only when the item actually has Strange (quality 11) equippers, so it stays
  * hidden for items that are never run Strange. Mirrors the leaderboards-page
- * table style; the Hale's Own threshold (10,000) is flagged inline.
+ * table style; the Hale's Own threshold (8,500) is flagged inline.
  */
 function StrangeLeaderboard({ defindex }: { defindex: number }) {
   const { data } = useQuery(itemStrangeBoardQueryOptions(defindex));
@@ -355,7 +355,7 @@ function StrangeLeaderboard({ defindex }: { defindex: number }) {
                   <span className="inline-flex items-center justify-end gap-1.5">
                     {haleOwn && (
                       <span
-                        title="Hale's Own (10,000+ kills)"
+                        title="Hale's Own (8,500+ kills)"
                         className="rounded border px-1 py-0.5 text-[10px] font-medium tracking-wide uppercase"
                         style={{ color: qualityColor(11), borderColor: qualityColor(11) }}
                       >

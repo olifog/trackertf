@@ -294,7 +294,7 @@ const STRANGE_RANKS: { kills: number; name: string }[] = [
   { kills: 2500, name: "Server-Clearing" },
   { kills: 5000, name: "Epic" },
   { kills: 7500, name: "Legendary" },
-  { kills: 8500, name: "Australian" },
+  { kills: 7616, name: "Australian" },
   { kills: HALE_OWN_KILLS, name: "Hale's Own" },
 ];
 
