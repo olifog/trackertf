@@ -200,7 +200,7 @@ export const fetchMapDetail = createServerFn({ method: "GET" })
           ? ((await db.execute(sql`
               select defindex, name, item_name, image_url, slot
               from item_schema
-              where defindex = any(${defindexes})
+              where defindex in ${defindexes}
             `)) as unknown as Record<string, unknown>[])
           : [];
       const itemByDef = new Map(items.map((r) => [num(r["defindex"]), r]));

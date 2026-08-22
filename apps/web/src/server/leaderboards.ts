@@ -102,7 +102,7 @@ async function fetchStrangeBoard(board: StrangeBoardKey): Promise<LeaderboardRes
   const pgRows = (await db.execute(sql`
     select steamid, personaname, avatar_hash
     from players
-    where steamid = any(${ids})
+    where steamid in ${ids}
       and personaname is not null and vac_banned = false
       and coalesce(botness, 0) < 0.5
   `)) as unknown as Record<string, unknown>[];
