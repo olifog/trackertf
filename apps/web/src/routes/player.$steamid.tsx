@@ -20,8 +20,8 @@ import {
   itemDisplayName,
   SLOT_NAMES,
 } from "#/lib/tf2";
-import { BOARD_MAP } from "@trackertf/db/boards";
-import { playerRanksQueryOptions } from "#/server/leaderboards";
+import { type BoardScope, BOARD_MAP } from "@trackertf/db/boards";
+import { type PlayerRankRow, playerRanksQueryOptions } from "#/server/leaderboards";
 import {
   friendRanksQueryOptions,
   type InventoryRow,
@@ -90,6 +90,60 @@ function haleOwnPct(kills: number): number {
   return Math.min(100, (kills / HALE_OWN_KILLS) * 100);
 }
 
+/** Group the (already percentile-sorted) rank rows by board scope, ordered
+ * overall-first then by CLASS_ORDER, for the "show all boards" view. */
+function groupRanksByScope(ranks: PlayerRankRow[]): { scope: BoardScope; rows: PlayerRankRow[] }[] {
+  const byScope = new Map<BoardScope, PlayerRankRow[]>();
+  for (const r of ranks) {
+    const scope = BOARD_MAP.get(r.boardKey)?.scope ?? "overall";
+    const list = byScope.get(scope);
+    if (list) list.push(r);
+    else byScope.set(scope, [r]);
+  }
+  const order: BoardScope[] = ["overall", ...CLASS_ORDER];
+  return order.filter((s) => byScope.has(s)).map((scope) => ({ scope, rows: byScope.get(scope)! }));
+}
+
+function RankTable({ rows }: { rows: PlayerRankRow[] }) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead>Board</TableHead>
+          <TableHead className="w-24 text-right">Percentile</TableHead>
+          <TableHead className="w-32 text-right">Rank</TableHead>
+          <TableHead className="w-32 text-right">Value</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((r) => (
+          <TableRow key={r.boardKey} className="h-8">
+            <TableCell className="py-1">
+              <Link to="/leaderboards" search={{ board: r.boardKey }} className="hover:underline">
+                {r.label}
+              </Link>
+            </TableCell>
+            <TableCell className="py-1 text-right">
+              <span className="rounded bg-secondary/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                top {((100 * r.rank) / r.of).toFixed(1)}%
+              </span>
+            </TableCell>
+            <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+              #{r.rank.toLocaleString()}
+              <span className="text-muted-foreground"> / {r.of.toLocaleString()}</span>
+            </TableCell>
+            <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+              {r.value.toLocaleString(undefined, {
+                maximumFractionDigits: BOARD_MAP.get(r.boardKey)?.decimals ?? 0,
+              })}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
 function PlayerPage() {
   const { steamid } = Route.useParams();
   const { data: p } = useSuspenseQuery(playerQueryOptions(steamid));
@@ -102,6 +156,7 @@ function PlayerPage() {
   const recrawl = useMutation({
     mutationFn: () => requestRecrawl({ data: { steamid } }),
   });
+  const [showAllRanks, setShowAllRanks] = useState(false);
   const bestRanks = ranks.slice(0, 20);
 
   if (!p.found) {
@@ -241,48 +296,34 @@ function PlayerPage() {
       {bestRanks.length > 0 && (
         <div>
           <h2 className="mb-2 font-heading text-lg font-semibold">Leaderboard positions</h2>
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead>Board</TableHead>
-                <TableHead className="w-24 text-right">Percentile</TableHead>
-                <TableHead className="w-32 text-right">Rank</TableHead>
-                <TableHead className="w-32 text-right">Value</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {bestRanks.map((r) => (
-                <TableRow key={r.boardKey} className="h-8">
-                  <TableCell className="py-1">
-                    <Link
-                      to="/leaderboards"
-                      search={{ board: r.boardKey }}
-                      className="hover:underline"
-                    >
-                      {r.label}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="py-1 text-right">
-                    <span className="rounded bg-secondary/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                      top {((100 * r.rank) / r.of).toFixed(1)}%
+          {showAllRanks ? (
+            <div className="space-y-4">
+              {groupRanksByScope(ranks).map(({ scope, rows }) => (
+                <div key={String(scope)}>
+                  <div className="mb-1 flex items-center gap-2">
+                    {scope !== "overall" && CLASS_NAMES[scope] && (
+                      <img src={`/${CLASS_NAMES[scope]}.svg`} alt="" className="h-4 w-4" />
+                    )}
+                    <span className="text-sm font-semibold capitalize">
+                      {scope === "overall" ? "Overall" : (CLASS_NAMES[scope] ?? scope)}
                     </span>
-                  </TableCell>
-                  <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
-                    #{r.rank.toLocaleString()}
-                    <span className="text-muted-foreground"> / {r.of.toLocaleString()}</span>
-                  </TableCell>
-                  <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
-                    {r.value.toLocaleString(undefined, {
-                      maximumFractionDigits: BOARD_MAP.get(r.boardKey)?.decimals ?? 0,
-                    })}
-                  </TableCell>
-                </TableRow>
+                  </div>
+                  <RankTable rows={rows} />
+                </div>
               ))}
-            </TableBody>
-          </Table>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Best {bestRanks.length} of {ranks.length} boards.
-          </p>
+            </div>
+          ) : (
+            <RankTable rows={bestRanks} />
+          )}
+          <button
+            type="button"
+            onClick={() => setShowAllRanks((v) => !v)}
+            className="mt-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            {showAllRanks
+              ? `Show top ${bestRanks.length}`
+              : `Show all ${ranks.length.toLocaleString()} boards`}
+          </button>
         </div>
       )}
 

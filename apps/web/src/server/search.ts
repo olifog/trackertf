@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { schema } from "@trackertf/db";
-import { and, asc, desc, eq, ilike, inArray, isNotNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "./db.ts";
 
@@ -58,7 +58,14 @@ export const globalSearch = createServerFn({ method: "GET" })
       .where(
         /^\d{17}$/.test(data.query)
           ? eq(schema.players.steamid, data.query)
-          : and(isNotNull(schema.players.personaname), ilike(schema.players.personaname, pattern)),
+          : and(
+              isNotNull(schema.players.personaname),
+              // Match against the lower(personaname) gin_trgm index: a plain
+              // `personaname ILIKE ...` does NOT hit it (different indexed
+              // expression) and seq-scans players on every keystroke. Wrapping
+              // the column in lower() lets the trigram index serve the LIKE.
+              sql`lower(${schema.players.personaname}) like ${pattern.toLowerCase()}`,
+            ),
       )
       .limit(5);
 

@@ -365,6 +365,14 @@ export type DeltaPeriod = (typeof DELTA_PERIODS)[number];
  * here is the reskin group id. Compares the newest snapshot against the newest
  * snapshot at least `period` days older; if that much history doesn't exist
  * yet, falls back to the earliest snapshot and reports the real span in `days`.
+ *
+ * SIGNIFICANCE INVARIANT: this fn takes no filter args — count and sample_size
+ * are always the unfiltered headline population. The delta badge feeds those
+ * into a two-proportion z-test, so it is only correct while the visible filters
+ * ARE the headline slice. The caller MUST gate rendering on `isHeadline`
+ * (routes/usage.tsx) so the z-test's n never disagrees with the filters on
+ * screen. Do not surface this delta under any non-default class/slot/playtime/
+ * merge filter without also supplying a matching filtered denominator.
  */
 export const fetchUsageDeltas = createServerFn({ method: "GET" })
   .validator(
