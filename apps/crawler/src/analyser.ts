@@ -134,7 +134,10 @@ async function recompute(): Promise<void> {
           select p.steamid from players p
           where p.items_status = 'ok'
             and coalesce(p.tf2_minutes_2wk, 0) >= ${pop.active2wk}
-            and coalesce(p.tf2_minutes, 0) > ${pop.minutes}
+            -- inclusive: the UI labels these buckets "All" / "500h+" / ... and
+            -- the active-2wk filter above is >=, so a player at exactly the
+            -- threshold belongs in the bucket (was > , which dropped them)
+            and coalesce(p.tf2_minutes, 0) >= ${pop.minutes}
             and coalesce(p.botness, 0) < 0.5
         ),
         total as (select count(*)::int n from pop),
@@ -252,8 +255,13 @@ async function recordUsageHistory(): Promise<void> {
   `);
 }
 
-/** avg points/min, kills/hr, dmg/min of players equipping each weapon group
- * per class (10h+ on the class, weapons slots only, class-aware merge ids) */
+/** MEDIAN points/min, kills/hr, dmg/min of players equipping each weapon group
+ * per class (10h+ on the class, weapons slots only, class-aware merge ids).
+ * Median, not mean: a handful of farm/idle-server outliers drag a mean way up,
+ * so the item page's per-class numbers were inflated and inconsistent with
+ * /performance (which already uses a median). The DB columns keep their legacy
+ * `avg_*` names but now hold medians (single writer here, single reader in
+ * apps/web item.ts; the UI labels them "median"). */
 async function recomputeWeaponStats(): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.execute(sql`delete from weapon_class_stats`);
@@ -271,9 +279,9 @@ async function recomputeWeaponStats(): Promise<void> {
           else coalesce(s.reskin_group, e.defindex) end as gid,
         e.class_num,
         count(distinct e.steamid)::int,
-        avg(p.points_scored::real * 60 / p.playtime_seconds),
-        avg(p.kills::real * 3600 / p.playtime_seconds),
-        avg(p.damage_dealt::real * 60 / p.playtime_seconds),
+        percentile_cont(0.5) within group (order by p.points_scored::real * 60 / p.playtime_seconds),
+        percentile_cont(0.5) within group (order by p.kills::real * 3600 / p.playtime_seconds),
+        percentile_cont(0.5) within group (order by p.damage_dealt::real * 60 / p.playtime_seconds),
         now()
       from equipped_items e
       join player_class_stats p on p.steamid = e.steamid and p.class_num = e.class_num

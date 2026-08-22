@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   bigint,
   bigserial,
@@ -62,7 +63,16 @@ export const players = pgTable(
     statsStatus: fetchStatus(),
     friendsStatus: fetchStatus(),
   },
-  (t) => [index("players_last_crawled_idx").on(t.lastCrawled)],
+  (t) => [
+    index("players_last_crawled_idx").on(t.lastCrawled),
+    // Functional index for the normalized-name equality in sightings.ts /
+    // matches.ts (regexp_replace(lower(btrim(personaname)), '\s+', ' ', 'g')).
+    // Must stay byte-identical to that expression or the planner won't use it;
+    // the gin_trgm index on lower(personaname) can't serve this exact equality.
+    index("players_personaname_norm_idx").on(
+      sql`regexp_replace(lower(btrim(${t.personaname})), '\\s+', ' ', 'g')`,
+    ),
+  ],
 );
 
 /** Latest raw GetPlayerItems payload per player (replaced on recrawl). */
@@ -363,7 +373,12 @@ export const matchSegments = pgTable(
      * NULL = still open or closed by process restart. */
     reasonClosed: text("reason_closed"),
   },
-  (t) => [index("match_segments_started_at_idx").on(t.startedAt)],
+  (t) => [
+    index("match_segments_started_at_idx").on(t.startedAt),
+    // mapDetail.ts filters `where ms.map = $map` (per-map regulars); without
+    // this the whole match_segments table is scanned.
+    index("match_segments_map_idx").on(t.map),
+  ],
 );
 
 /**

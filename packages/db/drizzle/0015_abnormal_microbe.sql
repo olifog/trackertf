@@ -1,0 +1,2 @@
+CREATE INDEX "match_segments_map_idx" ON "match_segments" USING btree ("map");--> statement-breakpoint
+CREATE INDEX "players_personaname_norm_idx" ON "players" USING btree (regexp_replace(lower(btrim("personaname")), '\s+', ' ', 'g'));

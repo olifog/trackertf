@@ -94,7 +94,12 @@ export const CH_SCHEMA: Record<string, string> = {
     max_score Int32,
     first_time_played Float32,
     last_time_played Float32,
-    observations UInt16
+    observations UInt16,
+    -- segment_id point-lookups (fetchSegment, resolveParticipant) don't hit the
+    -- (started_at, ...) sort-key prefix, so they full-scan this ever-growing
+    -- table. segment_id is a monotonic bigserial strongly correlated with
+    -- started_at, so a minmax skip index prunes granules cheaply.
+    INDEX idx_segment_id segment_id TYPE minmax GRANULARITY 1
   ) ENGINE = MergeTree ORDER BY (started_at, segment_id, name)`,
 };
 

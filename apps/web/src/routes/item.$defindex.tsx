@@ -138,7 +138,7 @@ function ItemPage() {
         <div>
           <h2 className="mb-2 font-heading text-lg font-semibold">
             Performance of players equipping this
-            <InfoTip className="ml-1.5" text="Correlational; 10h+ on class." />
+            <InfoTip className="ml-1.5" text="Median across players with 10h+ on the class. Correlational, not causal." />
           </h2>
           <Table>
             <TableHeader>
