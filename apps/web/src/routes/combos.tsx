@@ -5,6 +5,7 @@ import { NOT_ENOUGH_DATA } from "#/lib/copy";
 import { bySlot } from "#/lib/slots";
 import { formatPValue, type ProportionTest, twoProportionZTest } from "#/lib/stats";
 import { FilterRow, Segmented } from "#/components/ui/filter-bar";
+import { InfoTip } from "#/components/ui/info-tip";
 import { Slider } from "#/components/ui/slider";
 import { Switch } from "#/components/ui/switch";
 import {
@@ -17,12 +18,14 @@ import {
 } from "#/components/ui/table";
 import {
   type ComboMember,
+  type ComboMode,
   type ComboRow,
   comboFiltersSchema,
   combosInfiniteQueryOptions,
 } from "#/server/combos";
 
 const DEFAULT_FILTERS = {
+  mode: "weapons",
   class: 1,
   size: 2,
   minutes: 6_000,
@@ -30,6 +33,15 @@ const DEFAULT_FILTERS = {
   compare: false,
   sort: "usage",
 } as const;
+
+/** per-mode page copy + the noun used in-line ("… run together") */
+const MODES: { value: ComboMode; label: string; heading: string; noun: string }[] = [
+  { value: "weapons", label: "Weapons", heading: "Weapon combos", noun: "weapons" },
+  { value: "cosmetics", label: "Cosmetics", heading: "Cosmetic combos", noun: "cosmetics" },
+  { value: "taunts", label: "Taunts", heading: "Taunt combos", noun: "taunts" },
+];
+
+const MODE_INFO = new Map(MODES.map((m) => [m.value, m]));
 
 const CLASSES = [
   { num: 1, label: "Scout" },
@@ -214,6 +226,8 @@ function CombosPage() {
   const popA = first?.popA ?? null;
   const popB = first?.popB ?? null;
   const compare = search.compare;
+  const mode = search.mode;
+  const modeInfo = MODE_INFO.get(mode) ?? MODES[0]!;
   // the server clamps size 4 to 3 (no class has 4 non-PDA weapon slots)
   const effectiveSize = search.size === 4 ? 3 : search.size;
 
@@ -254,9 +268,14 @@ function CombosPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <div>
-          <h1 className="font-heading text-2xl font-bold">Weapon combos</h1>
-          <p className="text-sm text-muted-foreground">
-            Which weapons players run together, per class.
+          <h1 className="font-heading text-2xl font-bold">{modeInfo.heading}</h1>
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            Which {modeInfo.noun} players run together, per class.
+            {mode !== "weapons" && (
+              <InfoTip
+                text={`Share of all players of the class — most equip few or no ${modeInfo.noun}, so rates run lower than weapons.`}
+              />
+            )}
           </p>
         </div>
         {popA !== null && (
@@ -273,6 +292,21 @@ function CombosPage() {
       </div>
 
       <div className="space-y-3 rounded-lg border bg-card/50 p-4">
+        <FilterRow label="Items">
+          <Segmented>
+            {MODES.map((m) => (
+              <Segment
+                key={m.value}
+                active={mode === m.value}
+                patch={{ mode: m.value }}
+                title={m.heading}
+              >
+                {m.label}
+              </Segment>
+            ))}
+          </Segmented>
+        </FilterRow>
+
         <FilterRow label="Class">
           <Segmented>
             <Segment active={search.class === -1} patch={{ class: -1 }} title="All classes (pooled)">
@@ -304,7 +338,7 @@ function CombosPage() {
               3
             </Segment>
           </Segmented>
-          <span className="text-[11px] text-muted-foreground">weapons run together</span>
+          <span className="text-[11px] text-muted-foreground">{modeInfo.noun} run together</span>
         </FilterRow>
 
         <FilterRow label={compare ? "Exp. A" : "Exp."}>
@@ -400,6 +434,7 @@ function CombosPage() {
                   row={row}
                   rank={index + 1}
                   compare={compare}
+                  stockAware={mode === "weapons"}
                   popA={popA}
                   popB={popB}
                 />
@@ -450,16 +485,19 @@ function ComboRowView({
   row,
   rank,
   compare,
+  stockAware,
   popA,
   popB,
 }: {
   row: ComboRow;
   rank: number;
   compare: boolean;
+  /** stock-inflation warning only applies to weapons (STOCK_GIDS are weapon defindexes) */
+  stockAware: boolean;
   popA: number | null;
   popB: number | null;
 }) {
-  const allStock = row.gids.length > 0 && row.gids.every((g) => STOCK_GIDS.has(g));
+  const allStock = stockAware && row.gids.length > 0 && row.gids.every((g) => STOCK_GIDS.has(g));
   // two-proportion z-test on the raw per-bucket player counts vs each bucket's
   // population — flags deltas that are pure sampling noise (ns).
   const test: ProportionTest | undefined =

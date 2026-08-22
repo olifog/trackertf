@@ -1,7 +1,7 @@
 /**
  * Canonical TF2 Strange weapon kill_eater rank tiers. A weapon's rank is the
  * name of the highest tier whose `min` kill count it has reached. "Hale's Own"
- * (25000 kills) is the top rank.
+ * (10000 kills) is the top rank.
  */
 export interface StrangeRank {
   /** minimum kill_eater count to reach this rank */
@@ -9,7 +9,7 @@ export interface StrangeRank {
   name: string;
 }
 
-/** Ordered ascending by `min`; the top rank is "Hale's Own" at 25000. */
+/** Ordered ascending by `min`; the top rank is "Hale's Own" at 10000. */
 export const STRANGE_RANKS: readonly StrangeRank[] = [
   { min: 0, name: "Strange" },
   { min: 10, name: "Unremarkable" },
@@ -30,12 +30,12 @@ export const STRANGE_RANKS: readonly StrangeRank[] = [
   { min: 2500, name: "Server-Clearing" },
   { min: 5000, name: "Epic" },
   { min: 7500, name: "Legendary" },
-  { min: 12500, name: "Australian" },
-  { min: 25000, name: "Hale's Own" },
+  { min: 8500, name: "Australian" },
+  { min: 10000, name: "Hale's Own" },
 ] as const;
 
 /** The kill count of the top rank ("Hale's Own"). */
-export const HALE_OWN_KILLS = 25000;
+export const HALE_OWN_KILLS = 10000;
 
 /** Rank name for a given kill_eater count (highest tier reached). */
 export function strangeRank(kills: number): string {

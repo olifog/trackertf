@@ -14,8 +14,23 @@ export const HOURS_BUCKETS = [0, 6_000, 30_000, 60_000, 120_000, 240_000] as con
 const snapTo = (buckets: readonly number[]) => (v: number) =>
   buckets.reduce((best, b) => (Math.abs(b - v) < Math.abs(best - v) ? b : best));
 
+/**
+ * Which item family the combos are drawn from. `weapons` uses the purpose-built
+ * `loadout.weapon_gids` array (slots 0-6). `cosmetics` (slot 7) and `taunts`
+ * (slot 8) are aggregated on the fly from the `equipped` fact table — the same
+ * per-item source the usage page reads — folding each (player, class)'s items
+ * of that slot into a cgid set, then reusing the identical combo machinery.
+ */
+export const COMBO_SLOT: Record<Exclude<ComboMode, "weapons">, number> = {
+  cosmetics: 7,
+  taunts: 8,
+};
+export type ComboMode = "weapons" | "cosmetics" | "taunts";
+
 /** Every combos-page filter lives in the URL — this schema is the contract. */
 export const comboFiltersSchema = z.object({
+  /** item family the combos are drawn from */
+  mode: z.enum(["weapons", "cosmetics", "taunts"]).catch("weapons").default("weapons"),
   /** -1 = all classes (pooled), 1-9 = Web API class number. Per-class is the primary view. */
   class: z.number().int().min(-1).max(9).catch(1).default(1),
   /** combo size: 2 or 3 weapons; 4 only meaningful for Engineer (server clamps otherwise) */
@@ -133,8 +148,32 @@ interface RawCount {
  * Build the pair/triple/quad combo aggregation. `size` is a validated integer
  * in {2,3,4} — never user free-text — so composing the fixed ARRAY JOIN / ORDER
  * BY fragments from it is safe; all populations & values bind as CH params.
+ *
+ * The row source exposes a `weapon_gids` cgid array + `lifetime_min`/`class_num`.
+ * For weapons that's the precomputed `loadout` table; for cosmetics/taunts it's
+ * an on-the-fly per-(player, class) fold of the `equipped` fact rows for that
+ * slot into the same shape, so every downstream fragment is byte-identical.
  */
-function buildComboQuery(size: number, classNum: number, compare: boolean, sort: string): string {
+function buildComboQuery(
+  size: number,
+  classNum: number,
+  compare: boolean,
+  sort: string,
+  mode: ComboMode,
+): string {
+  // per-class fold hits the (class_num, slot, …) primary index; the pooled view
+  // (-1) drops the class predicate, matching the outer classFilter.
+  const srcClassFilter = classNum === -1 ? "" : "AND class_num = {cls:UInt8}";
+  const source =
+    mode === "weapons"
+      ? "loadout"
+      : `(
+      SELECT class_num, any(lifetime_min) AS lifetime_min,
+             groupUniqArray(cgid) AS weapon_gids
+      FROM equipped
+      WHERE slot = {slot:Int8} ${srcClassFilter}
+      GROUP BY steamid, class_num
+    )`;
   const letters = LETTERS.slice(0, size);
   const joins = letters.map((l) => `ARRAY JOIN weapon_gids AS ${l}`).join("\n    ");
   // strict ascending chain (a < b < c ...) collapses each unordered combo to one row
@@ -157,7 +196,7 @@ function buildComboQuery(size: number, classNum: number, compare: boolean, sort:
       SELECT ${gidsArr},
              countIf(lifetime_min >= {minA:UInt32}) AS cntA,
              countIf(lifetime_min >= {minB:UInt32}) AS cntB
-      FROM loadout
+      FROM ${source}
       ${joins}
       WHERE lifetime_min >= {minFloor:UInt32} ${classFilter} AND ${chain} AND ${pdaFilter}
       GROUP BY ${groupBy}
@@ -167,7 +206,7 @@ function buildComboQuery(size: number, classNum: number, compare: boolean, sort:
   }
   return `
     SELECT ${gidsArr}, count() AS cntA
-    FROM loadout
+    FROM ${source}
     ${joins}
     WHERE lifetime_min >= {minA:UInt32} ${classFilter} AND ${chain} AND ${pdaFilter}
     GROUP BY ${groupBy}
@@ -191,7 +230,7 @@ async function fetchPop(classNum: number, minMinutes: number): Promise<number> {
 export const fetchCombos = createServerFn({ method: "GET" })
   .validator(comboPageSchema)
   .handler(async ({ data }): Promise<ComboPage> => {
-    const { offset, class: classNum, minutes: minA, minutesB: minB, compare, sort } = data;
+    const { offset, mode, class: classNum, minutes: minA, minutesB: minB, compare, sort } = data;
     // With PDAs excluded no class has 4 real weapon slots (Engineer's 4th was a
     // PDA), so a size-4 combo can never form — clamp it to triples everywhere.
     const size = data.size === 4 ? 3 : data.size;
@@ -209,6 +248,7 @@ export const fetchCombos = createServerFn({ method: "GET" })
       off: offset,
       pdas: pdaGids,
     };
+    if (mode !== "weapons") params["slot"] = COMBO_SLOT[mode];
     if (classNum !== -1) params["cls"] = classNum;
     if (compare) {
       params["minB"] = minB;
@@ -219,7 +259,7 @@ export const fetchCombos = createServerFn({ method: "GET" })
 
     const raw = await chQuery<RawComboRow>(
       getCh(),
-      buildComboQuery(size, classNum, compare, effectiveSort),
+      buildComboQuery(size, classNum, compare, effectiveSort, mode),
       params,
     );
     const page = raw.slice(0, PAGE_SIZE);

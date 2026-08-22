@@ -41,7 +41,7 @@ export const STRANGE_BOARD_KEYS = ["strange:total", "strange:max", "strange:hale
 
 /** kills for a Strange item to reach the top "Hale's Own" rank (mirror of
  * HALE_OWN_KILLS in tf2-schema strange.ts / the player-page inline copy) */
-export const HALE_OWN_KILLS = 25000;
+export const HALE_OWN_KILLS = 10000;
 export type StrangeBoardKey = (typeof STRANGE_BOARD_KEYS)[number];
 const STRANGE_KEY_SET: ReadonlySet<string> = new Set(STRANGE_BOARD_KEYS);
 export const isStrangeBoard = (key: string): key is StrangeBoardKey => STRANGE_KEY_SET.has(key);
@@ -63,7 +63,7 @@ const boardKeySchema = z
  * avatar and the POP filter (public persona, no VAC ban, botness < 0.5 — the
  * same bot/outlier exclusion boards.ts applies to the grid boards).
  * `strange:haleown` ranks players by how many equipped Stranges have hit the
- * top rank (>= 25,000 kills) — a "how many maxed weapons" board.
+ * top rank (>= 10,000 kills) — a "how many maxed weapons" board.
  */
 async function fetchStrangeBoard(board: StrangeBoardKey): Promise<LeaderboardResponse> {
   const agg =
@@ -172,6 +172,73 @@ export const leaderboardQueryOptions = (board: string) =>
   queryOptions({
     queryKey: ["leaderboard", board],
     queryFn: () => fetchLeaderboard({ data: { board } }),
+  });
+
+export interface DistributionPoint {
+  /** percentile of the qualifying-player population, 0-100 */
+  percentile: number;
+  value: number;
+}
+
+export interface BoardDistribution {
+  /** ~40 pre-downsampled {percentile, value} samples of the population curve */
+  points: DistributionPoint[];
+  /** qualifying-player population size, null if the board has no PG population */
+  participants: number | null;
+}
+
+/** number of quantile samples the curve is downsampled to (chart-friendly) */
+const DISTRIBUTION_SAMPLES = 41;
+/** below this population a curve is noise — surface NOT_ENOUGH_DATA instead */
+const MIN_DISTRIBUTION_POP = 20;
+/** effectively "no limit": a cap well above the crawl corpus so boardSelectSql
+ * returns the whole population for the quantile pass (not just a biased top-N) */
+const DISTRIBUTION_POP_CAP = 100_000_000;
+
+/**
+ * Population distribution for one leaderboard board, as a compact quantile
+ * curve (value at each percentile) for charting the shape behind the top-100.
+ *
+ * PLAN.md envisages a precomputed `board_distributions` (~1000-point quantile
+ * arrays per board) in the analyser, but that table does not exist yet — the
+ * analyser only writes leaderboard_entries (top-100) + leaderboard_meta
+ * (participant counts). So this computes the curve live in one ordered-set
+ * aggregate pass: percentile_cont(<fractions>) over the same board population
+ * boardSelectSql defines (reusing its POP bot/VAC filter), already downsampled
+ * server-side to DISTRIBUTION_SAMPLES points. Strange boards live only in
+ * ClickHouse with no PG population to profile, so they return an empty curve.
+ */
+export const fetchBoardDistribution = createServerFn({ method: "GET" })
+  .validator(z.object({ board: boardKeySchema }))
+  .handler(async ({ data }): Promise<BoardDistribution> => {
+    if (isStrangeBoard(data.board)) return { points: [], participants: null };
+    const def = BOARD_MAP.get(data.board) as BoardDef;
+    const fractions = Array.from({ length: DISTRIBUTION_SAMPLES }, (_, i) =>
+      (i / (DISTRIBUTION_SAMPLES - 1)).toFixed(4),
+    );
+    const db = getDb();
+    const res = (await db.execute(sql`
+      select count(*)::int as n,
+        percentile_cont(${sql.raw(`array[${fractions.join(",")}]::double precision[]`)})
+          within group (order by t.value) as vals
+      from (${sql.raw(boardSelectSql(def, DISTRIBUTION_POP_CAP))}) t
+    `)) as unknown as { n: number; vals: number[] | null }[];
+    const row = res[0];
+    const vals = row?.vals ?? null;
+    if (!row || row.n < MIN_DISTRIBUTION_POP || !vals || vals.length !== fractions.length) {
+      return { points: [], participants: row?.n ?? null };
+    }
+    const points = vals.map((value, i) => ({
+      percentile: Math.round((i / (DISTRIBUTION_SAMPLES - 1)) * 100),
+      value: Number(value),
+    }));
+    return { points, participants: row.n };
+  });
+
+export const boardDistributionQueryOptions = (board: string) =>
+  queryOptions({
+    queryKey: ["boardDistribution", board],
+    queryFn: () => fetchBoardDistribution({ data: { board } }),
   });
 
 export interface PlayerRankRow {

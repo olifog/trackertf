@@ -588,7 +588,13 @@ function UsagePage() {
             <TableBody>
               {xp
                 ? items.map((item, index) => (
-                    <DeltaRow key={item.defindex} item={item} rank={index + 1} />
+                    <DeltaRow
+                      key={item.defindex}
+                      item={item}
+                      rank={index + 1}
+                      popA={popA ?? 0}
+                      popB={popB ?? 0}
+                    />
                   ))
                 : items.map((item, index) => {
                 let variants =
@@ -855,24 +861,61 @@ function CompareBar({ usage, count }: { usage: number; count: number }) {
 }
 
 /**
- * Low-vs-high adoption gap in percentage points. Positive (veterans favour it)
- * is chart-2, negative is destructive, near-zero is muted so noise reads flat.
+ * Low-vs-high adoption gap in percentage points. A two-proportion z-test (shared
+ * helper) over the raw equip counts / group populations decides whether the gap
+ * is real: significant deltas keep their sign/color (chart-2 = veterans favour
+ * it, destructive = novices favour it), non-significant ones are greyed with an
+ * "ns" tag so tiny-sample or bot-inflated noise can't read as a trend. The
+ * p-value and both count/population pairs live in the tooltip.
  */
-function DeltaCell({ delta }: { delta: number }) {
+function DeltaCell({
+  delta,
+  countA,
+  popA,
+  countB,
+  popB,
+}: {
+  delta: number;
+  countA: number;
+  popA: number;
+  countB: number;
+  popB: number;
+}) {
+  const test = twoProportionZTest(countA, popA, countB, popB);
   const pp = delta * 100;
-  const color =
-    Math.abs(pp) < 0.05 ? "text-muted-foreground" : pp > 0 ? "text-chart-2" : "text-destructive";
+  const title =
+    `${formatPValue(test.pValue, test.significant)} · ` +
+    `low ${countA.toLocaleString()}/${popA.toLocaleString()} · ` +
+    `high ${countB.toLocaleString()}/${popB.toLocaleString()}`;
+  const color = !test.significant
+    ? "text-muted-foreground/50"
+    : pp > 0
+      ? "text-chart-2"
+      : "text-destructive";
   return (
-    <span className={`font-mono text-sm tabular-nums ${color}`}>
+    <span title={title} className={`font-mono text-sm tabular-nums ${color}`}>
       {pp > 0 ? "+" : ""}
       {pp.toFixed(1)}
       <span className="ml-0.5 text-[10px] text-muted-foreground/60">pp</span>
+      {!test.significant && (
+        <span className="ml-1 text-[9px] tracking-wider uppercase">ns</span>
+      )}
     </span>
   );
 }
 
 /** One item row in the experience-compare view: low usage, high usage, delta. */
-function DeltaRow({ item, rank }: { item: UsageRow; rank: number }) {
+function DeltaRow({
+  item,
+  rank,
+  popA,
+  popB,
+}: {
+  item: UsageRow;
+  rank: number;
+  popA: number;
+  popB: number;
+}) {
   return (
     <TableRow className="h-9">
       <TableCell className="py-1 text-right font-mono text-muted-foreground">{rank}</TableCell>
@@ -889,7 +932,13 @@ function DeltaRow({ item, rank }: { item: UsageRow; rank: number }) {
         <CompareBar usage={item.usageB ?? 0} count={item.countB ?? 0} />
       </TableCell>
       <TableCell className="py-1 text-right">
-        <DeltaCell delta={item.delta ?? 0} />
+        <DeltaCell
+          delta={item.delta ?? 0}
+          countA={item.count}
+          popA={popA}
+          countB={item.countB ?? 0}
+          popB={popB}
+        />
       </TableCell>
     </TableRow>
   );

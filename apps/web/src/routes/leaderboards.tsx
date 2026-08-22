@@ -20,8 +20,14 @@ import {
   DEFAULT_RATE_HOURS,
   RATE_THRESHOLD_HOURS,
 } from "@trackertf/db/boards";
+import { BoardDistributionChart } from "#/components/board-distribution-chart";
 import { avatarUrl, CLASS_NAMES } from "#/lib/tf2";
-import { isStrangeBoard, leaderboardQueryOptions, STRANGE_BOARD_KEYS } from "#/server/leaderboards";
+import {
+  boardDistributionQueryOptions,
+  isStrangeBoard,
+  leaderboardQueryOptions,
+  STRANGE_BOARD_KEYS,
+} from "#/server/leaderboards";
 
 /**
  * Strange-kill boards aren't part of the (metric, scope, kind) grid in
@@ -54,7 +60,7 @@ const STRANGE_BOARDS: BoardDef[] = [
     metric: "hours",
     scope: "overall",
     kind: "total",
-    label: "Most Hale's Own weapons (equipped Stranges past 25,000 kills)",
+    label: "Most Hale's Own weapons (equipped Stranges past 10,000 kills)",
     shortLabel: "Hale's Own",
     valueLabel: "Hale's Own items",
     decimals: 0,
@@ -78,7 +84,10 @@ export const Route = createFileRoute("/leaderboards")({
   search: { middlewares: [stripSearchParams({ board: "hours" })] },
   loaderDeps: ({ search }) => search,
   loader: ({ context, deps }) =>
-    context.queryClient.ensureQueryData(leaderboardQueryOptions(deps.board)),
+    Promise.all([
+      context.queryClient.ensureQueryData(leaderboardQueryOptions(deps.board)),
+      context.queryClient.ensureQueryData(boardDistributionQueryOptions(deps.board)),
+    ]),
   component: LeaderboardsPage,
 });
 
@@ -238,6 +247,7 @@ function ThresholdSlider({ def }: { def: BoardDef }) {
 function LeaderboardsPage() {
   const { board } = Route.useSearch();
   const { data } = useSuspenseQuery(leaderboardQueryOptions(board));
+  const { data: distribution } = useSuspenseQuery(boardDistributionQueryOptions(board));
   const { rows, participants } = data;
   const def = boardDef(board);
   const strange = isStrangeBoard(board);
@@ -345,6 +355,16 @@ function LeaderboardsPage() {
         <p className="text-xs text-muted-foreground">
           {participants.toLocaleString()} qualifying players.
         </p>
+      )}
+
+      {!strange && (
+        <div className="rounded-lg border bg-card/50 p-4">
+          <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+            {def.valueLabel} by percentile
+            <InfoTip>Board value at each percentile of the qualifying-player population.</InfoTip>
+          </div>
+          <BoardDistributionChart points={distribution.points} valueLabel={def.valueLabel} />
+        </div>
       )}
 
       <Table>
