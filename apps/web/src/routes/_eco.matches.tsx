@@ -3,7 +3,8 @@ import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router
 import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "#/components/ui/card";
-import { FilterRow, ListFilterInput, Segmented } from "#/components/ui/filter-bar";
+import { FilterRow, Segmented } from "#/components/ui/filter-bar";
+import { FilterableList } from "#/components/ui/filterable-list";
 import {
   ChartContainer,
   type ChartConfig,
@@ -369,105 +370,6 @@ const GAMEMODE_LABELS: Record<GamemodeKey, string> = {
   other: "Other",
 };
 
-/**
- * Median casual match length by gamemode and map, from completed segments the
- * sampler witnessed start-to-finish (see server/matchDurations.ts). Lazy,
- * non-blocking, and degrades to an empty state while the sampler accrues
- * enough both-ends-witnessed matches.
- */
-function MatchDurationsSection() {
-  const { data, isLoading } = useQuery(matchDurationsQueryOptions());
-  const byGamemode = data?.byGamemode ?? [];
-  const byMap = data?.byMap ?? [];
-  const [filter, setFilter] = useState("");
-  const needle = filter.trim().toLowerCase();
-  const visibleMaps = needle
-    ? byMap.filter((m) => (m.map ?? "").toLowerCase().includes(needle))
-    : byMap;
-
-  return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-1.5">
-        <h2 className="font-heading text-lg font-semibold">How long matches take</h2>
-        <InfoTip text="Median length of matches the sampler saw start-to-finish. Truncated observations excluded." />
-      </div>
-
-      {byGamemode.length > 0 && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          {byGamemode.map((g) => (
-            <div key={g.gamemode} className="rounded-lg border bg-card/50 p-3">
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                {GAMEMODE_LABELS[g.gamemode]}
-              </div>
-              <div className="mt-1 font-heading text-xl font-bold tabular-nums">
-                {fmtDuration(g.medianSec)}
-              </div>
-              <div className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
-                {fmtDuration(g.p25Sec)}–{fmtDuration(g.p75Sec)} · {g.matches.toLocaleString()}{" "}
-                {g.matches === 1 ? "match" : "matches"}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {byMap.length > 0 && (
-        <>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <ListFilterInput value={filter} onChange={setFilter} placeholder="filter maps…" />
-            <span className="font-mono text-[11px] text-muted-foreground">
-              {visibleMaps.length.toLocaleString()} of {byMap.length.toLocaleString()} maps
-            </span>
-          </div>
-          <Table containerClassName="max-h-[28rem] overflow-y-auto rounded-md border">
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow className="hover:bg-transparent">
-                <TableHead>Map</TableHead>
-                <TableHead className="w-40">Mode</TableHead>
-                <TableHead className="w-24 text-right">Median</TableHead>
-                <TableHead className="w-32 text-right">Typical range</TableHead>
-                <TableHead className="w-24 text-right">Matches</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visibleMaps.map((m: DurationRow) => (
-                <TableRow key={m.map}>
-                  <TableCell className="font-mono text-xs">{m.map}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {GAMEMODE_LABELS[m.gamemode]}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {fmtDuration(m.medianSec)}
-                  </TableCell>
-                  <TableCell className="text-right text-muted-foreground tabular-nums">
-                    {fmtDuration(m.p25Sec)}–{fmtDuration(m.p75Sec)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {m.matches.toLocaleString()}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {visibleMaps.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="py-4 text-center text-muted-foreground">
-                    No maps match "{filter.trim()}".
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </>
-      )}
-
-      {!isLoading && byGamemode.length === 0 && (
-        <div className="rounded-lg border bg-card/50 p-4 text-sm text-muted-foreground">
-          {NOT_ENOUGH_DATA}
-        </div>
-      )}
-    </section>
-  );
-}
-
 /* -------------------------------------------------------------------------- */
 /* Forward attribution (>= 0.9): committed name→profile links                   */
 /* -------------------------------------------------------------------------- */
@@ -522,104 +424,215 @@ function classColor(classNum: number): string {
   return CLASS_COLORS[(classNum - 1) % CLASS_COLORS.length] ?? "var(--muted-foreground)";
 }
 
+/** A row of the merged per-map table: class mix from the attributor
+ * (server/mapClass.ts) joined with match-length stats from boundary-witnessed
+ * segments (server/matchDurations.ts). The two datasets accrue independently
+ * (attribution vs >= 5 start-to-finish sampled matches), so either side can be
+ * missing — missing cells render as a muted "—". */
+interface MergedMapRow {
+  map: string;
+  gamemode: GamemodeKey;
+  mix: MapClassRow | null;
+  duration: DurationRow | null;
+}
+
+const NO_MIX_MAPS: MapClassRow[] = [];
+const NO_DURATION_MAPS: DurationRow[] = [];
+
 /**
- * Class playtime by map — the per-class lifetime-playtime delta attributed to a
- * single map over "pure-map" windows (see server/mapClass.ts). A stacked share
- * bar per map shows how the class mix shifts between maps. Attributed, not
- * directly observed, so it accrues slowly and degrades to an empty state.
+ * "Maps": one per-map table over the union of both per-map datasets — the
+ * attributed class-mix share bar next to the median/typical match length.
+ * Class-mix maps lead in attributed-time-desc order (the old class-mix list's
+ * sort); duration-only maps follow, most-observed first. Clicking a row opens
+ * the full MapDetailPanel.
  */
-function MapClassSection() {
-  const { data, isLoading } = useQuery(mapClassPlaytimeQueryOptions());
-  const maps = data?.maps ?? [];
+function MapsSection() {
+  const durationsQuery = useQuery(matchDurationsQueryOptions());
+  const mixQuery = useQuery(mapClassPlaytimeQueryOptions());
+  const byGamemode = durationsQuery.data?.byGamemode ?? [];
+  const durationMaps = durationsQuery.data?.byMap ?? NO_DURATION_MAPS;
+  const mixMaps = mixQuery.data?.maps ?? NO_MIX_MAPS;
+  const isLoading = durationsQuery.isLoading || mixQuery.isLoading;
   const [openMap, setOpenMap] = useState<string | null>(null);
-  const [filter, setFilter] = useState("");
-  const needle = filter.trim().toLowerCase();
-  const visibleMaps = needle ? maps.filter((m) => m.map.toLowerCase().includes(needle)) : maps;
+
+  const merged = useMemo(() => {
+    const byMap = new Map<string, MergedMapRow>();
+    for (const m of mixMaps) {
+      byMap.set(m.map, { map: m.map, gamemode: m.gamemode, mix: m, duration: null });
+    }
+    // duration-only maps arrive matches-desc from the server; keep that order
+    const durationOnly: MergedMapRow[] = [];
+    for (const d of durationMaps) {
+      if (d.map === null) continue;
+      const existing = byMap.get(d.map);
+      if (existing) existing.duration = d;
+      else durationOnly.push({ map: d.map, gamemode: d.gamemode, mix: null, duration: d });
+    }
+    return [...byMap.values(), ...durationOnly];
+  }, [mixMaps, durationMaps]);
 
   return (
     <section className="space-y-3">
       <h2 className="font-heading text-lg font-semibold">Maps</h2>
       <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        Class mix by map. Click a map for detail.
-        <InfoTip text="Inferred from attributed players' per-class playtime; a trend, not a census." />
+        Class mix and typical match length by map. Click a map for detail.
+        <InfoTip text="Class mix is inferred from attributed players' per-class playtime — a trend, not a census. Match lengths are medians of matches the sampler saw start-to-finish; truncated observations excluded. The two accrue independently, so a map can have one without the other." />
       </p>
 
-      {maps.length > 0 && (
-        <>
-          <div className="flex flex-wrap gap-x-3 gap-y-1">
-            {Object.entries(CLASS_NAMES).map(([n, label]) => (
-              <span key={n} className="inline-flex items-center gap-1.5 text-[11px]">
-                <span
-                  className="inline-block h-2.5 w-2.5 rounded-sm"
-                  style={{ backgroundColor: classColor(Number(n)) }}
-                />
-                {label}
-              </span>
+      {byGamemode.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-semibold">Typical match length by mode</h3>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {byGamemode.map((g) => (
+              <div key={g.gamemode} className="rounded-lg border bg-card/50 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  {GAMEMODE_LABELS[g.gamemode]}
+                </div>
+                <div className="mt-1 font-heading text-xl font-bold tabular-nums">
+                  {fmtDuration(g.medianSec)}
+                </div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+                  {fmtDuration(g.p25Sec)}–{fmtDuration(g.p75Sec)} · {g.matches.toLocaleString()}{" "}
+                  {g.matches === 1 ? "match" : "matches"}
+                </div>
+              </div>
             ))}
           </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <ListFilterInput value={filter} onChange={setFilter} placeholder="filter maps…" />
-            <span className="font-mono text-[11px] text-muted-foreground">
-              {visibleMaps.length.toLocaleString()} of {maps.length.toLocaleString()} maps
-            </span>
-          </div>
-          <div className="max-h-[28rem] space-y-1 overflow-y-auto rounded-md border p-1">
-            {visibleMaps.map((m: MapClassRow) => {
-              const isOpen = openMap === m.map;
-              return (
-                <div key={m.map} className="rounded-md">
-                  <button
-                    type="button"
-                    onClick={() => setOpenMap(isOpen ? null : m.map)}
-                    className={`grid w-full grid-cols-[1rem_10rem_1fr_5rem] items-center gap-3 rounded-md px-1 py-1 text-left transition-colors hover:bg-accent/50 ${
-                      isOpen ? "bg-accent/40" : ""
-                    }`}
-                  >
-                    <span className="text-center font-mono text-[11px] text-primary/70">
-                      {isOpen ? "▾" : "▸"}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate font-mono text-xs">{m.map}</span>
-                      <span className="block text-[10px] text-muted-foreground">
-                        {GAMEMODE_LABELS[m.gamemode]}
-                      </span>
-                    </span>
-                    <span className="flex h-4 w-full overflow-hidden rounded bg-secondary/40">
-                      {m.classes.map((c) => (
-                        <span
-                          key={c.classNum}
-                          className="h-full"
-                          style={{
-                            width: `${c.share * 100}%`,
-                            backgroundColor: classColor(c.classNum),
-                          }}
-                          title={`${CLASS_NAMES[c.classNum] ?? c.classNum}: ${fmtDuration(c.seconds)} (${(c.share * 100).toFixed(0)}%)`}
-                        />
-                      ))}
-                    </span>
-                    <span className="text-right text-[11px] tabular-nums text-muted-foreground">
-                      {fmtDuration(m.totalSeconds)}
-                    </span>
-                  </button>
-                  {isOpen && <MapDetailPanel map={m.map} />}
-                </div>
-              );
-            })}
-            {visibleMaps.length === 0 && (
-              <p className="px-2 py-3 text-sm text-muted-foreground">
-                No maps match "{filter.trim()}".
-              </p>
+        </div>
+      )}
+
+      {merged.length > 0 && (
+        <>
+          {mixMaps.length > 0 && (
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              {Object.entries(CLASS_NAMES).map(([n, label]) => (
+                <span key={n} className="inline-flex items-center gap-1.5 text-[11px]">
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-sm"
+                    style={{ backgroundColor: classColor(Number(n)) }}
+                  />
+                  {label}
+                </span>
+              ))}
+            </div>
+          )}
+          <FilterableList items={merged} filterBy={(m) => m.map} noun="maps">
+            {({ visible, scrollClass, stickyHeaderClass, emptyText }) => (
+              <Table containerClassName={scrollClass}>
+                <TableHeader className={stickyHeaderClass}>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-6" />
+                    <TableHead>Map</TableHead>
+                    <TableHead className="min-w-44">Class mix</TableHead>
+                    <TableHead className="w-24 text-right">Class time</TableHead>
+                    <TableHead className="w-20 text-right">Median</TableHead>
+                    <TableHead className="w-28 text-right">Typical range</TableHead>
+                    <TableHead className="w-20 text-right">Matches</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visible.map((row) => (
+                    <MergedMapRows
+                      key={row.map}
+                      row={row}
+                      isOpen={openMap === row.map}
+                      onToggle={() => setOpenMap(openMap === row.map ? null : row.map)}
+                    />
+                  ))}
+                  {emptyText && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
+                        {emptyText}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
             )}
-          </div>
+          </FilterableList>
         </>
       )}
 
-      {!isLoading && maps.length === 0 && (
+      {!isLoading && merged.length === 0 && byGamemode.length === 0 && (
         <div className="rounded-lg border bg-card/50 p-4 text-sm text-muted-foreground">
           {NOT_ENOUGH_DATA}
         </div>
       )}
     </section>
+  );
+}
+
+/** muted placeholder for a cell whose dataset doesn't cover this map */
+function MissingCell() {
+  return <span className="text-muted-foreground/50">—</span>;
+}
+
+/** One merged map row (click to expand the MapDetailPanel underneath). */
+function MergedMapRows({
+  row,
+  isOpen,
+  onToggle,
+}: {
+  row: MergedMapRow;
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <>
+      <TableRow className="h-10 cursor-pointer" onClick={onToggle}>
+        <TableCell className="py-1 text-center font-mono text-[11px] text-primary/70">
+          {isOpen ? "▾" : "▸"}
+        </TableCell>
+        <TableCell className="max-w-0 min-w-36 overflow-hidden py-1">
+          <span className="block truncate font-mono text-xs">{row.map}</span>
+          <span className="block text-[10px] text-muted-foreground">
+            {GAMEMODE_LABELS[row.gamemode]}
+          </span>
+        </TableCell>
+        <TableCell className="py-1">
+          {row.mix ? (
+            <span className="flex h-4 w-full min-w-40 overflow-hidden rounded bg-secondary/40">
+              {row.mix.classes.map((c) => (
+                <span
+                  key={c.classNum}
+                  className="h-full"
+                  style={{
+                    width: `${c.share * 100}%`,
+                    backgroundColor: classColor(c.classNum),
+                  }}
+                  title={`${CLASS_NAMES[c.classNum] ?? c.classNum}: ${fmtDuration(c.seconds)} (${(c.share * 100).toFixed(0)}%)`}
+                />
+              ))}
+            </span>
+          ) : (
+            <MissingCell />
+          )}
+        </TableCell>
+        <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+          {row.mix ? fmtDuration(row.mix.totalSeconds) : <MissingCell />}
+        </TableCell>
+        <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+          {row.duration ? fmtDuration(row.duration.medianSec) : <MissingCell />}
+        </TableCell>
+        <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+          {row.duration ? (
+            `${fmtDuration(row.duration.p25Sec)}–${fmtDuration(row.duration.p75Sec)}`
+          ) : (
+            <MissingCell />
+          )}
+        </TableCell>
+        <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+          {row.duration ? row.duration.matches.toLocaleString() : <MissingCell />}
+        </TableCell>
+      </TableRow>
+      {isOpen && (
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={7} className="p-0">
+            <MapDetailPanel map={row.map} />
+          </TableCell>
+        </TableRow>
+      )}
+    </>
   );
 }
 
@@ -631,7 +644,7 @@ function MapDetailPanel({ map }: { map: string }) {
     return <div className="px-6 py-3 font-mono text-xs text-muted-foreground">loading map…</div>;
   }
   return (
-    <div className="grid gap-6 rounded-b-md border-x border-b bg-card/40 px-4 py-4 lg:grid-cols-2">
+    <div className="grid gap-6 bg-card/40 px-4 py-4 lg:grid-cols-2">
       <MapClassMix detail={data} />
       <MapScorers scorers={data.topScorers} />
       <MapRegulars regulars={data.regulars} regularCount={data.regularCount} />
@@ -815,11 +828,6 @@ function MatchesPage() {
   });
   const leaders = leadersQuery.data ?? NO_LEADERS;
   const [openSegment, setOpenSegment] = useState<string | null>(null);
-  const [segmentFilter, setSegmentFilter] = useState("");
-  const segmentNeedle = segmentFilter.trim().toLowerCase();
-  const visibleSegments = segmentNeedle
-    ? segments.filter((s) => s.map.toLowerCase().includes(segmentNeedle))
-    : segments;
 
   const segmentIds = useMemo(() => {
     const s = new Set<string>();
@@ -843,9 +851,7 @@ function MatchesPage() {
 
       <CasualSnapshot segments={segments} leaders={leaders} />
 
-      <MatchDurationsSection />
-
-      <MapClassSection />
+      <MapsSection />
 
       <section className="space-y-3">
         <h2 className="font-heading text-lg font-semibold">Fastest observed scorers</h2>
@@ -884,36 +890,44 @@ function MatchesPage() {
         </div>
 
         <div className="relative">
-          <Table containerClassName="max-h-[36rem] overflow-y-auto rounded-md border">
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="w-10 text-right">#</TableHead>
-                <TableHead>Player</TableHead>
-                <TableHead className="w-28">Map</TableHead>
-                <TableHead className="w-28">Region</TableHead>
-                <TableHead className="w-24 text-right">Pts/hr</TableHead>
-                <TableHead className="w-20 text-right">Span</TableHead>
-                <TableHead className="w-16 text-right">Obs</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {leaders.map((row, i) => (
-                <LeaderRows
-                  key={`${row.segmentId}:${row.name}`}
-                  row={row}
-                  rank={i + 1}
-                  attribution={attr.get(attrKey(row.segmentId, row.name))}
-                />
-              ))}
-              {leaders.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
-                    No participants match these filters.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+          <FilterableList
+            items={leaders}
+            maxHeightClassName="max-h-[36rem]"
+            emptyMessage="No participants match these filters."
+          >
+            {({ visible, scrollClass, stickyHeaderClass, emptyText }) => (
+              <Table containerClassName={scrollClass}>
+                <TableHeader className={stickyHeaderClass}>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-10 text-right">#</TableHead>
+                    <TableHead>Player</TableHead>
+                    <TableHead className="w-28">Map</TableHead>
+                    <TableHead className="w-28">Region</TableHead>
+                    <TableHead className="w-24 text-right">Pts/hr</TableHead>
+                    <TableHead className="w-20 text-right">Span</TableHead>
+                    <TableHead className="w-16 text-right">Obs</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visible.map((row, i) => (
+                    <LeaderRows
+                      key={`${row.segmentId}:${row.name}`}
+                      row={row}
+                      rank={i + 1}
+                      attribution={attr.get(attrKey(row.segmentId, row.name))}
+                    />
+                  ))}
+                  {emptyText && (
+                    <TableRow>
+                      <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
+                        {emptyText}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </FilterableList>
           {leadersQuery.isPlaceholderData && (
             <div className="absolute inset-0 z-10 flex items-start justify-center rounded-md bg-background/60 pt-24 backdrop-blur-[1px]">
               <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm text-muted-foreground shadow-sm">
@@ -927,61 +941,56 @@ function MatchesPage() {
 
       <section className="space-y-3">
         <h2 className="font-heading text-lg font-semibold">Recent segments</h2>
-        {segments.length > 0 && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <ListFilterInput
-              value={segmentFilter}
-              onChange={setSegmentFilter}
-              placeholder="filter maps…"
-            />
-            <span className="font-mono text-[11px] text-muted-foreground">
-              {visibleSegments.length.toLocaleString()} of {segments.length.toLocaleString()}{" "}
-              segments
-            </span>
-          </div>
-        )}
-        <Table containerClassName="max-h-[32rem] overflow-y-auto rounded-md border">
-          <TableHeader className="sticky top-0 z-10 bg-background">
-            <TableRow className="hover:bg-transparent">
-              <TableHead className="w-6" />
-              <TableHead>Map</TableHead>
-              <TableHead className="w-32">Region</TableHead>
-              <TableHead className="w-28 text-right">Started</TableHead>
-              <TableHead className="w-24 text-right">Duration</TableHead>
-              <TableHead className="w-20 text-right">Players</TableHead>
-              <TableHead className="w-20 text-right">Rounds</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {visibleSegments.map((seg) => {
-              const isOpen = openSegment === seg.segmentId;
-              return (
-                <SegmentRows
-                  key={seg.segmentId}
-                  segmentId={seg.segmentId}
-                  map={seg.map}
-                  region={regionLabel(seg.region)}
-                  startedAt={seg.startedAt}
-                  durationSec={seg.durationSec}
-                  participants={seg.participants}
-                  rounds={seg.rounds}
-                  isOpen={isOpen}
-                  onToggle={() => setOpenSegment(isOpen ? null : seg.segmentId)}
-                  attr={attr}
-                />
-              );
-            })}
-            {visibleSegments.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
-                  {segments.length === 0
-                    ? NOT_ENOUGH_DATA
-                    : `No segments match "${segmentFilter.trim()}".`}
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+        <FilterableList
+          items={segments}
+          filterBy={(s) => s.map}
+          noun="segments"
+          placeholder="filter maps…"
+          maxHeightClassName="max-h-[32rem]"
+        >
+          {({ visible, scrollClass, stickyHeaderClass, emptyText }) => (
+            <Table containerClassName={scrollClass}>
+              <TableHeader className={stickyHeaderClass}>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="w-6" />
+                  <TableHead>Map</TableHead>
+                  <TableHead className="w-32">Region</TableHead>
+                  <TableHead className="w-28 text-right">Started</TableHead>
+                  <TableHead className="w-24 text-right">Duration</TableHead>
+                  <TableHead className="w-20 text-right">Players</TableHead>
+                  <TableHead className="w-20 text-right">Rounds</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible.map((seg) => {
+                  const isOpen = openSegment === seg.segmentId;
+                  return (
+                    <SegmentRows
+                      key={seg.segmentId}
+                      segmentId={seg.segmentId}
+                      map={seg.map}
+                      region={regionLabel(seg.region)}
+                      startedAt={seg.startedAt}
+                      durationSec={seg.durationSec}
+                      participants={seg.participants}
+                      rounds={seg.rounds}
+                      isOpen={isOpen}
+                      onToggle={() => setOpenSegment(isOpen ? null : seg.segmentId)}
+                      attr={attr}
+                    />
+                  );
+                })}
+                {emptyText && (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
+                      {emptyText}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </FilterableList>
       </section>
     </div>
   );

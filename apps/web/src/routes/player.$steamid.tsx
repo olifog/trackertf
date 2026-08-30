@@ -1,6 +1,8 @@
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
+import { Segmented } from "#/components/ui/filter-bar";
+import { FilterableList } from "#/components/ui/filterable-list";
 import { InfoTip } from "#/components/ui/info-tip";
 import {
   Table,
@@ -90,57 +92,130 @@ function haleOwnPct(kills: number): number {
   return Math.min(100, (kills / HALE_OWN_KILLS) * 100);
 }
 
-/** Group the (already percentile-sorted) rank rows by board scope, ordered
- * overall-first then by CLASS_ORDER, for the "show all boards" view. */
-function groupRanksByScope(ranks: PlayerRankRow[]): { scope: BoardScope; rows: PlayerRankRow[] }[] {
-  const byScope = new Map<BoardScope, PlayerRankRow[]>();
-  for (const r of ranks) {
-    const scope = BOARD_MAP.get(r.boardKey)?.scope ?? "overall";
-    const list = byScope.get(scope);
-    if (list) list.push(r);
-    else byScope.set(scope, [r]);
-  }
-  const order: BoardScope[] = ["overall", ...CLASS_ORDER];
-  return order.filter((s) => byScope.has(s)).map((scope) => ({ scope, rows: byScope.get(scope)! }));
+/** the board scope a rank row belongs to (overall / class number) */
+function rankScope(r: PlayerRankRow): BoardScope {
+  return BOARD_MAP.get(r.boardKey)?.scope ?? "overall";
 }
 
-function RankTable({ rows }: { rows: PlayerRankRow[] }) {
+/** One class-scope pill in the ranks section's `Segmented` strip — same visual
+ * language as the leaderboards-page picker, but a plain button over local
+ * state (the player page's rank filters never touch the URL). */
+function ScopePill({
+  children,
+  active,
+  onClick,
+  title,
+}: {
+  children: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+  title?: string | undefined;
+}) {
   return (
-    <Table>
-      <TableHeader>
-        <TableRow className="hover:bg-transparent">
-          <TableHead>Board</TableHead>
-          <TableHead className="w-24 text-right">Percentile</TableHead>
-          <TableHead className="w-32 text-right">Rank</TableHead>
-          <TableHead className="w-32 text-right">Value</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((r) => (
-          <TableRow key={r.boardKey} className="h-8">
-            <TableCell className="py-1">
-              <Link to="/leaderboards" search={{ board: r.boardKey }} className="hover:underline">
-                {r.label}
-              </Link>
-            </TableCell>
-            <TableCell className="py-1 text-right">
-              <span className="rounded bg-secondary/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                top {((100 * r.rank) / r.of).toFixed(1)}%
-              </span>
-            </TableCell>
-            <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
-              #{r.rank.toLocaleString()}
-              <span className="text-muted-foreground"> / {r.of.toLocaleString()}</span>
-            </TableCell>
-            <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
-              {r.value.toLocaleString(undefined, {
-                maximumFractionDigits: BOARD_MAP.get(r.boardKey)?.decimals ?? 0,
-              })}
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`flex h-9 shrink-0 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
+        active
+          ? "bg-primary font-medium text-primary-foreground"
+          : "bg-secondary/40 text-secondary-foreground hover:bg-accent"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** "Leaderboard positions": every board rank this player holds (up to 256),
+ * percentile-sorted, behind class-scope pills + a label filter + a capped
+ * scroll instead of the old top-20/"show all" expander. */
+function RanksSection({ ranks }: { ranks: PlayerRankRow[] }) {
+  const [scope, setScope] = useState<BoardScope | "all">("all");
+  const presentScopes = new Set(ranks.map(rankScope));
+  // ranks arrive percentile-sorted; filtering preserves that order
+  const scoped = scope === "all" ? ranks : ranks.filter((r) => rankScope(r) === scope);
+
+  return (
+    <div>
+      <h2 className="mb-2 font-heading text-lg font-semibold">Leaderboard positions</h2>
+      <div className="space-y-3">
+        <Segmented>
+          <ScopePill active={scope === "all"} onClick={() => setScope("all")}>
+            All
+          </ScopePill>
+          {presentScopes.has("overall") && (
+            <ScopePill active={scope === "overall"} onClick={() => setScope("overall")}>
+              Overall
+            </ScopePill>
+          )}
+          {CLASS_ORDER.filter((c) => presentScopes.has(c)).map((c) => (
+            <ScopePill
+              key={c}
+              active={scope === c}
+              onClick={() => setScope(c)}
+              title={CLASS_NAMES[c]}
+            >
+              <img
+                src={`/${CLASS_NAMES[c]}.svg`}
+                alt={CLASS_NAMES[c]}
+                className={`h-4.5 w-4.5 ${scope === c ? "" : "opacity-80"}`}
+              />
+            </ScopePill>
+          ))}
+        </Segmented>
+        <FilterableList items={scoped} filterBy={(r) => r.label} noun="boards">
+          {({ visible, scrollClass, stickyHeaderClass, emptyText }) => (
+            <Table containerClassName={scrollClass}>
+              <TableHeader className={stickyHeaderClass}>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Board</TableHead>
+                  <TableHead className="w-24 text-right">Percentile</TableHead>
+                  <TableHead className="w-32 text-right">Rank</TableHead>
+                  <TableHead className="w-32 text-right">Value</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible.map((r) => (
+                  <TableRow key={r.boardKey} className="h-8">
+                    <TableCell className="py-1">
+                      <Link
+                        to="/leaderboards"
+                        search={{ board: r.boardKey }}
+                        className="hover:underline"
+                      >
+                        {r.label}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="py-1 text-right">
+                      <span className="rounded bg-secondary/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                        top {((100 * r.rank) / r.of).toFixed(1)}%
+                      </span>
+                    </TableCell>
+                    <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+                      #{r.rank.toLocaleString()}
+                      <span className="text-muted-foreground"> / {r.of.toLocaleString()}</span>
+                    </TableCell>
+                    <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+                      {r.value.toLocaleString(undefined, {
+                        maximumFractionDigits: BOARD_MAP.get(r.boardKey)?.decimals ?? 0,
+                      })}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {emptyText && (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={4} className="py-4 text-center text-muted-foreground">
+                      {emptyText}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </FilterableList>
+      </div>
+    </div>
   );
 }
 
@@ -156,8 +231,6 @@ function PlayerPage() {
   const recrawl = useMutation({
     mutationFn: () => requestRecrawl({ data: { steamid } }),
   });
-  const [showAllRanks, setShowAllRanks] = useState(false);
-  const bestRanks = ranks.slice(0, 20);
 
   if (!p.found) {
     return (
@@ -293,39 +366,7 @@ function PlayerPage() {
 
       {sessions.sessions.length > 0 && <SessionsSection sessions={sessions} />}
 
-      {bestRanks.length > 0 && (
-        <div>
-          <h2 className="mb-2 font-heading text-lg font-semibold">Leaderboard positions</h2>
-          {showAllRanks ? (
-            <div className="space-y-4">
-              {groupRanksByScope(ranks).map(({ scope, rows }) => (
-                <div key={String(scope)}>
-                  <div className="mb-1 flex items-center gap-2">
-                    {scope !== "overall" && CLASS_NAMES[scope] && (
-                      <img src={`/${CLASS_NAMES[scope]}.svg`} alt="" className="h-4 w-4" />
-                    )}
-                    <span className="text-sm font-semibold capitalize">
-                      {scope === "overall" ? "Overall" : (CLASS_NAMES[scope] ?? scope)}
-                    </span>
-                  </div>
-                  <RankTable rows={rows} />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <RankTable rows={bestRanks} />
-          )}
-          <button
-            type="button"
-            onClick={() => setShowAllRanks((v) => !v)}
-            className="mt-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            {showAllRanks
-              ? `Show top ${bestRanks.length}`
-              : `Show all ${ranks.length.toLocaleString()} boards`}
-          </button>
-        </div>
-      )}
+      {ranks.length > 0 && <RanksSection ranks={ranks} />}
 
       {friendRanks.hasData && (
         <div>
@@ -417,30 +458,45 @@ function PlayerPage() {
         <div>
           <h2 className="mb-2 font-heading text-lg font-semibold">Friends</h2>
           {friends.friends.length > 0 && (
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {friends.friends.map((f) => (
-                <Link
-                  key={f.steamid}
-                  to="/player/$steamid"
-                  params={{ steamid: f.steamid }}
-                  className="flex items-center gap-2 rounded-md border bg-card/50 px-2.5 py-1.5 transition-colors hover:bg-accent"
-                >
-                  {avatarUrl(f.avatarHash) && (
-                    <img
-                      src={avatarUrl(f.avatarHash) as string}
-                      alt=""
-                      className="h-7 w-7 rounded"
-                    />
-                  )}
-                  <span className="truncate text-[13px]">{f.personaname ?? f.steamid}</span>
-                  {f.friendSince > 0 && (
-                    <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/60">
-                      since {new Date(f.friendSince * 1000).getFullYear()}
-                    </span>
-                  )}
-                </Link>
-              ))}
-            </div>
+            <FilterableList
+              items={friends.friends}
+              filterBy={(f) => f.personaname ?? f.steamid}
+              noun="friends"
+              placeholder="filter friends…"
+              minFilterItems={12}
+              maxHeightClassName="max-h-[24rem]"
+            >
+              {({ visible, scrollClass, emptyText }) =>
+                emptyText ? (
+                  <p className="text-sm text-muted-foreground">{emptyText}</p>
+                ) : (
+                  <div className={`${scrollClass} grid gap-2 p-2 sm:grid-cols-2 lg:grid-cols-3`}>
+                    {visible.map((f) => (
+                      <Link
+                        key={f.steamid}
+                        to="/player/$steamid"
+                        params={{ steamid: f.steamid }}
+                        className="flex items-center gap-2 rounded-md border bg-card/50 px-2.5 py-1.5 transition-colors hover:bg-accent"
+                      >
+                        {avatarUrl(f.avatarHash) && (
+                          <img
+                            src={avatarUrl(f.avatarHash) as string}
+                            alt=""
+                            className="h-7 w-7 rounded"
+                          />
+                        )}
+                        <span className="truncate text-[13px]">{f.personaname ?? f.steamid}</span>
+                        {f.friendSince > 0 && (
+                          <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/60">
+                            since {new Date(f.friendSince * 1000).getFullYear()}
+                          </span>
+                        )}
+                      </Link>
+                    ))}
+                  </div>
+                )
+              }
+            </FilterableList>
           )}
           {friends.totalFriends > friends.friends.length && (
             <p className="mt-2 text-xs text-muted-foreground">
@@ -533,35 +589,53 @@ function SightingsSection({ sightings }: { sightings: PlayerSightings }) {
         />
       </h2>
       {sightings.sightings.length > 0 ? (
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>Map</TableHead>
-              <TableHead className="w-40">Region</TableHead>
-              <TableHead className="w-28 text-right">When</TableHead>
-              <TableHead className="w-28 text-right">Score gain</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sightings.sightings.map((s) => (
-              <TableRow key={s.segmentId} className="h-9">
-                <TableCell className="py-1 font-mono text-xs">{s.map || "—"}</TableCell>
-                <TableCell className="py-1 text-xs text-muted-foreground">
-                  {regionLabel(s.region)}
-                </TableCell>
-                <TableCell
-                  className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground"
-                  suppressHydrationWarning
-                >
-                  {formatAgo(new Date(s.startedAt * 1000).toISOString())}
-                </TableCell>
-                <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
-                  {s.scoreGain === null ? "—" : `+${s.scoreGain.toLocaleString()}`}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <FilterableList
+          items={sightings.sightings}
+          filterBy={(s) => s.map ?? ""}
+          noun="sightings"
+          placeholder="filter maps…"
+          minFilterItems={12}
+          maxHeightClassName="max-h-[24rem]"
+        >
+          {({ visible, scrollClass, stickyHeaderClass, emptyText }) => (
+            <Table containerClassName={scrollClass}>
+              <TableHeader className={stickyHeaderClass}>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Map</TableHead>
+                  <TableHead className="w-40">Region</TableHead>
+                  <TableHead className="w-28 text-right">When</TableHead>
+                  <TableHead className="w-28 text-right">Score gain</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible.map((s) => (
+                  <TableRow key={s.segmentId} className="h-9">
+                    <TableCell className="py-1 font-mono text-xs">{s.map || "—"}</TableCell>
+                    <TableCell className="py-1 text-xs text-muted-foreground">
+                      {regionLabel(s.region)}
+                    </TableCell>
+                    <TableCell
+                      className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground"
+                      suppressHydrationWarning
+                    >
+                      {formatAgo(new Date(s.startedAt * 1000).toISOString())}
+                    </TableCell>
+                    <TableCell className="py-1 text-right font-mono text-xs tabular-nums">
+                      {s.scoreGain === null ? "—" : `+${s.scoreGain.toLocaleString()}`}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {emptyText && (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={4} className="py-4 text-center text-muted-foreground">
+                      {emptyText}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </FilterableList>
       ) : (
         <p className="text-sm text-muted-foreground">
           No unambiguous sightings in the last 30 days.
@@ -599,53 +673,57 @@ function SessionsSection({ sessions }: { sessions: PlayerSessions }) {
           text="Reconstructed from stat-snapshot gaps. Map shown only when pinnable."
         />
       </h2>
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="w-28 text-right">When</TableHead>
-            <TableHead className="w-24 text-right">Played</TableHead>
-            <TableHead>Classes</TableHead>
-            <TableHead className="hidden w-40 sm:table-cell">Map</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {sessions.sessions.map((s) => (
-            <TableRow key={`${s.startedAt}:${s.endedAt}`} className="h-9">
-              <TableCell
-                className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground"
-                suppressHydrationWarning
-              >
-                {formatAgo(new Date(s.endedAt * 1000).toISOString())}
-              </TableCell>
-              <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
-                {formatSessionLength(s.playtimeSeconds)}
-              </TableCell>
-              <TableCell className="py-1">
-                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  {s.classes.map((c) => (
-                    <span key={c.classNum} className="flex items-center gap-1">
-                      {CLASS_NAMES[c.classNum] && (
-                        <img
-                          src={`/${CLASS_NAMES[c.classNum]}.svg`}
-                          alt={CLASS_NAMES[c.classNum]}
-                          title={CLASS_NAMES[c.classNum]}
-                          className="h-4 w-4"
-                        />
-                      )}
-                      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                        {formatSessionLength(c.seconds)}
-                      </span>
+      <FilterableList items={sessions.sessions} maxHeightClassName="max-h-[24rem]">
+        {({ visible, scrollClass, stickyHeaderClass }) => (
+          <Table containerClassName={scrollClass}>
+            <TableHeader className={stickyHeaderClass}>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-28 text-right">When</TableHead>
+                <TableHead className="w-24 text-right">Played</TableHead>
+                <TableHead>Classes</TableHead>
+                <TableHead className="hidden w-40 sm:table-cell">Map</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visible.map((s) => (
+                <TableRow key={`${s.startedAt}:${s.endedAt}`} className="h-9">
+                  <TableCell
+                    className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground"
+                    suppressHydrationWarning
+                  >
+                    {formatAgo(new Date(s.endedAt * 1000).toISOString())}
+                  </TableCell>
+                  <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+                    {formatSessionLength(s.playtimeSeconds)}
+                  </TableCell>
+                  <TableCell className="py-1">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      {s.classes.map((c) => (
+                        <span key={c.classNum} className="flex items-center gap-1">
+                          {CLASS_NAMES[c.classNum] && (
+                            <img
+                              src={`/${CLASS_NAMES[c.classNum]}.svg`}
+                              alt={CLASS_NAMES[c.classNum]}
+                              title={CLASS_NAMES[c.classNum]}
+                              className="h-4 w-4"
+                            />
+                          )}
+                          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                            {formatSessionLength(c.seconds)}
+                          </span>
+                        </span>
+                      ))}
                     </span>
-                  ))}
-                </span>
-              </TableCell>
-              <TableCell className="hidden py-1 font-mono text-xs text-muted-foreground sm:table-cell">
-                {s.map ?? "—"}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+                  </TableCell>
+                  <TableCell className="hidden py-1 font-mono text-xs text-muted-foreground sm:table-cell">
+                    {s.map ?? "—"}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </FilterableList>
     </div>
   );
 }

@@ -1,6 +1,5 @@
 import { keepPreviousData, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
-import { useState } from "react";
 import {
   Area,
   AreaChart,
@@ -14,7 +13,8 @@ import {
   YAxis,
 } from "recharts";
 import { z } from "zod";
-import { ListFilterInput, Segmented } from "#/components/ui/filter-bar";
+import { Segmented } from "#/components/ui/filter-bar";
+import { FilterableList } from "#/components/ui/filterable-list";
 import {
   ChartContainer,
   type ChartConfig,
@@ -399,13 +399,8 @@ function ServersPage() {
   });
   const trend = trendQuery.data ?? [];
   const { totals, byRegion, byMap, byGamemode, rushHour, tags, byContinent } = overview;
-  const [mapFilter, setMapFilter] = useState("");
-  const mapNeedle = mapFilter.trim().toLowerCase();
   // rank before filtering so filtered rows keep their true "#" position
   const rankedMaps = byMap.map((m, i) => ({ m, rank: i + 1 }));
-  const visibleMaps = mapNeedle
-    ? rankedMaps.filter(({ m }) => displayMap(m.map).toLowerCase().includes(mapNeedle))
-    : rankedMaps;
   const communityPlayers = Math.max(0, totals.players - totals.officialPlayers);
   const communityServers = Math.max(0, totals.servers - totals.officialServers);
   const avgFill = totals.officialServers > 0 ? totals.officialPlayers / totals.officialServers : 0;
@@ -601,58 +596,57 @@ function ServersPage() {
             </div>
 
             <div>
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                <h2 className="font-heading text-lg font-semibold">
-                  Top maps <span className="text-sm text-muted-foreground">(by players)</span>
-                </h2>
-                <ListFilterInput
-                  value={mapFilter}
-                  onChange={setMapFilter}
-                  placeholder="filter maps…"
-                  className="w-44"
-                />
-              </div>
-              <Table containerClassName="max-h-[28rem] overflow-y-auto rounded-md border">
-                <TableHeader className="sticky top-0 z-10 bg-background">
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-10 text-right">#</TableHead>
-                    <TableHead>Map</TableHead>
-                    <TableHead className="text-right">Players</TableHead>
-                    <TableHead className="text-right">Official</TableHead>
-                    <TableHead className="text-right">Servers</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visibleMaps.map(({ m, rank }) => (
-                    <TableRow key={m.map} className="h-9">
-                      <TableCell className="py-1 text-right font-mono text-muted-foreground">
-                        {rank}
-                      </TableCell>
-                      <TableCell className="overflow-hidden py-1 font-mono text-xs text-ellipsis">
-                        {displayMap(m.map)}
-                      </TableCell>
-                      <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
-                        {m.players.toLocaleString()}
-                      </TableCell>
-                      <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
-                        {m.officialPlayers.toLocaleString()}
-                      </TableCell>
-                      <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
-                        {m.servers.toLocaleString()}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {visibleMaps.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-4 text-center text-muted-foreground">
-                        {byMap.length === 0
-                          ? "No map data in the latest scan."
-                          : `No maps match "${mapFilter.trim()}".`}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+              <h2 className="mb-2 font-heading text-lg font-semibold">
+                Top maps <span className="text-sm text-muted-foreground">(by players)</span>
+              </h2>
+              <FilterableList
+                items={rankedMaps}
+                filterBy={({ m }) => displayMap(m.map)}
+                noun="maps"
+                emptyMessage="No map data in the latest scan."
+              >
+                {({ visible, scrollClass, stickyHeaderClass, emptyText }) => (
+                  <Table containerClassName={scrollClass}>
+                    <TableHeader className={stickyHeaderClass}>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="w-10 text-right">#</TableHead>
+                        <TableHead>Map</TableHead>
+                        <TableHead className="text-right">Players</TableHead>
+                        <TableHead className="text-right">Official</TableHead>
+                        <TableHead className="text-right">Servers</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {visible.map(({ m, rank }) => (
+                        <TableRow key={m.map} className="h-9">
+                          <TableCell className="py-1 text-right font-mono text-muted-foreground">
+                            {rank}
+                          </TableCell>
+                          <TableCell className="overflow-hidden py-1 font-mono text-xs text-ellipsis">
+                            {displayMap(m.map)}
+                          </TableCell>
+                          <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+                            {m.players.toLocaleString()}
+                          </TableCell>
+                          <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                            {m.officialPlayers.toLocaleString()}
+                          </TableCell>
+                          <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                            {m.servers.toLocaleString()}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {emptyText && (
+                        <TableRow>
+                          <TableCell colSpan={5} className="py-4 text-center text-muted-foreground">
+                            {emptyText}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                )}
+              </FilterableList>
             </div>
           </div>
         </>
