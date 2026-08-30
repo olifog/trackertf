@@ -1,8 +1,20 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts";
+import { useState } from "react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { z } from "zod";
-import { Segmented } from "#/components/ui/filter-bar";
+import { ListFilterInput, Segmented } from "#/components/ui/filter-bar";
 import {
   ChartContainer,
   type ChartConfig,
@@ -43,11 +55,22 @@ export const Route = createFileRoute("/_eco/servers")({
   validateSearch: searchSchema,
   search: { middlewares: [stripSearchParams(DEFAULT_SEARCH)] },
   loaderDeps: ({ search }) => search,
-  loader: ({ context, deps }) =>
-    Promise.all([
+  loader: ({ context, deps }) => {
+    // Block navigation (SSR data / pending skeleton) only when no trend query
+    // holds data yet. Range switches on the page resolve instantly and keep
+    // the old chart under a fetching overlay (keepPreviousData); the overview
+    // is search-independent and stays cached across range clicks.
+    const hasData = context.queryClient
+      .getQueriesData({ queryKey: ["serverTrend"] })
+      .some(([, data]) => data !== undefined);
+    const ensured = Promise.all([
       context.queryClient.ensureQueryData(serverOverviewQueryOptions()),
       context.queryClient.ensureQueryData(serverTrendQueryOptions(deps.range)),
-    ]),
+    ]);
+    if (!hasData) return ensured;
+    ensured.catch(() => {});
+    return undefined;
+  },
   component: ServersPage,
 });
 
@@ -129,6 +152,7 @@ function Segment({
     <Link
       from={Route.fullPath}
       search={{ range }}
+      resetScroll={false}
       className={`flex h-9 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
         active
           ? "bg-primary font-medium text-primary-foreground"
@@ -225,9 +249,7 @@ function GamemodePie({ data }: { data: { gamemode: GamemodeKey; players: number 
   return (
     <ChartContainer config={config} className="mx-auto aspect-square h-[260px]">
       <PieChart>
-        <ChartTooltip
-          content={<ChartTooltipContent nameKey="gamemode" hideLabel />}
-        />
+        <ChartTooltip content={<ChartTooltipContent nameKey="gamemode" hideLabel />} />
         <Pie data={slices} dataKey="players" nameKey="gamemode" innerRadius={55} strokeWidth={2}>
           {slices.map((d) => (
             <Cell key={d.gamemode} fill={GAMEMODE_COLORS[d.gamemode]} stroke="var(--background)" />
@@ -371,12 +393,22 @@ function RushHourChart({
 function ServersPage() {
   const search = Route.useSearch();
   const { data: overview } = useSuspenseQuery(serverOverviewQueryOptions());
-  const { data: trend } = useSuspenseQuery(serverTrendQueryOptions(search.range));
+  const trendQuery = useQuery({
+    ...serverTrendQueryOptions(search.range),
+    placeholderData: keepPreviousData,
+  });
+  const trend = trendQuery.data ?? [];
   const { totals, byRegion, byMap, byGamemode, rushHour, tags, byContinent } = overview;
+  const [mapFilter, setMapFilter] = useState("");
+  const mapNeedle = mapFilter.trim().toLowerCase();
+  // rank before filtering so filtered rows keep their true "#" position
+  const rankedMaps = byMap.map((m, i) => ({ m, rank: i + 1 }));
+  const visibleMaps = mapNeedle
+    ? rankedMaps.filter(({ m }) => displayMap(m.map).toLowerCase().includes(mapNeedle))
+    : rankedMaps;
   const communityPlayers = Math.max(0, totals.players - totals.officialPlayers);
   const communityServers = Math.max(0, totals.servers - totals.officialServers);
-  const avgFill =
-    totals.officialServers > 0 ? totals.officialPlayers / totals.officialServers : 0;
+  const avgFill = totals.officialServers > 0 ? totals.officialPlayers / totals.officialServers : 0;
   const seatFill = totals.capacity > 0 ? totals.players / totals.capacity : 0;
   const emptyCommunity = totals.emptyCommunityServers;
   const communityTotal = communityServers + emptyCommunity;
@@ -434,7 +466,17 @@ function ServersPage() {
                 </Segment>
               </Segmented>
             </div>
-            <TrendChart points={trend} range={search.range} />
+            <div className="relative">
+              <TrendChart points={trend} range={search.range} />
+              {trendQuery.isPlaceholderData && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-background/60 backdrop-blur-[1px]">
+                  <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm text-muted-foreground shadow-sm">
+                    <span className="size-4 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-foreground" />
+                    Updating…
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="grid gap-6 lg:grid-cols-2">
@@ -506,7 +548,9 @@ function ServersPage() {
                     <div key={c.continent} className="flex items-center gap-1.5 text-xs">
                       <span
                         className="h-2.5 w-2.5 shrink-0 rounded-[2px]"
-                        style={{ backgroundColor: CONTINENT_COLORS[c.continent] ?? "var(--chart-1)" }}
+                        style={{
+                          backgroundColor: CONTINENT_COLORS[c.continent] ?? "var(--chart-1)",
+                        }}
                       />
                       <span className="text-muted-foreground">{c.continent}</span>
                       <span className="ml-auto font-mono tabular-nums">
@@ -557,11 +601,19 @@ function ServersPage() {
             </div>
 
             <div>
-              <h2 className="mb-2 font-heading text-lg font-semibold">
-                Top maps <span className="text-sm text-muted-foreground">(by players)</span>
-              </h2>
-              <Table>
-                <TableHeader>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <h2 className="font-heading text-lg font-semibold">
+                  Top maps <span className="text-sm text-muted-foreground">(by players)</span>
+                </h2>
+                <ListFilterInput
+                  value={mapFilter}
+                  onChange={setMapFilter}
+                  placeholder="filter maps…"
+                  className="w-44"
+                />
+              </div>
+              <Table containerClassName="max-h-[28rem] overflow-y-auto rounded-md border">
+                <TableHeader className="sticky top-0 z-10 bg-background">
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-10 text-right">#</TableHead>
                     <TableHead>Map</TableHead>
@@ -571,10 +623,10 @@ function ServersPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {byMap.map((m, i) => (
+                  {visibleMaps.map(({ m, rank }) => (
                     <TableRow key={m.map} className="h-9">
                       <TableCell className="py-1 text-right font-mono text-muted-foreground">
-                        {i + 1}
+                        {rank}
                       </TableCell>
                       <TableCell className="overflow-hidden py-1 font-mono text-xs text-ellipsis">
                         {displayMap(m.map)}
@@ -590,10 +642,12 @@ function ServersPage() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {byMap.length === 0 && (
+                  {visibleMaps.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={5} className="py-4 text-center text-muted-foreground">
-                        No map data in the latest scan.
+                        {byMap.length === 0
+                          ? "No map data in the latest scan."
+                          : `No maps match "${mapFilter.trim()}".`}
                       </TableCell>
                     </TableRow>
                   )}

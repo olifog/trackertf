@@ -50,15 +50,25 @@ const QUALITY_UNIQUE = 6;
 /** Primary Strange score attribute; its integer count lives in `value`. */
 const KILL_EATER_DEFINDEX = 214;
 
+/** Anything at/above this is a corrupt counter, not a kill count. Steam sends
+ * 4294967295 (uint32 -1 sentinel) on some items; that used to overflow the
+ * int4 strange_kills column and abort the player's whole equipped_items batch
+ * insert. The verified all-time record Strange sits under 1M kills, so 100M
+ * cleanly separates "absurd but storable" from garbage. */
+const KILL_EATER_MAX = 100_000_000;
+
 /**
  * Strange kill count for an item = the attr-214 value (integer count in
  * `value`, falling back to `float_value`). 0 if the item has no such attribute
- * (i.e. it isn't Strange, or attributes were never captured/stored).
+ * (i.e. it isn't Strange, or attributes were never captured/stored), and 0 for
+ * non-finite / negative / sentinel values that can't be a real counter.
  */
 function killEaterCount(item: BackpackItem): number {
   const attr = item.attributes?.find((a) => a.defindex === KILL_EATER_DEFINDEX);
   if (!attr) return 0;
-  return attr.value ?? attr.float_value ?? 0;
+  const raw = attr.value ?? attr.float_value ?? 0;
+  if (!Number.isFinite(raw) || raw < 0 || raw >= KILL_EATER_MAX) return 0;
+  return Math.floor(raw);
 }
 
 export interface EquippedRow {

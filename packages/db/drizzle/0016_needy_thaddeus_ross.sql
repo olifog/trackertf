@@ -1,0 +1,1 @@
+ALTER TABLE "match_participants" ADD COLUMN "attribution_checked_at" timestamp with time zone;

@@ -128,6 +128,7 @@ function Segment({
     <Link
       from={Route.fullPath}
       search={(prev) => ({ ...prev, ...patch })}
+      resetScroll={false}
       title={title}
       className={`flex h-9 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
         active
@@ -155,7 +156,9 @@ function SwitchFilter({
       <Switch
         size="sm"
         checked={checked}
-        onCheckedChange={(next) => navigate({ search: (prev) => ({ ...prev, ...patch(next) }) })}
+        onCheckedChange={(next) =>
+          navigate({ search: (prev) => ({ ...prev, ...patch(next) }), resetScroll: false })
+        }
       />
       {label}
     </label>
@@ -180,7 +183,10 @@ function StopSlider({
   const [dragging, setDragging] = useState<number | null>(null);
   const index = dragging ?? committed;
   const commit = (i: number) =>
-    void navigate({ search: (prev) => ({ ...prev, ...patch(stops[i]?.value ?? 0) }) });
+    void navigate({
+      search: (prev) => ({ ...prev, ...patch(stops[i]?.value ?? 0) }),
+      resetScroll: false,
+    });
   return (
     <div className="w-full max-w-72 pt-1">
       <Slider

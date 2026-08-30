@@ -5,7 +5,13 @@
  * with one SQL pass per population.
  */
 import { createDbFromEnv } from "@trackertf/db";
-import { BOARDS, boardCountSql, boardSelectSql } from "@trackertf/db/boards";
+import {
+  BOARDS,
+  boardCountSql,
+  boardSelectSql,
+  rankMetaSelectSql,
+  rankPopSelectSql,
+} from "@trackertf/db/boards";
 import { sql } from "drizzle-orm";
 
 const db = createDbFromEnv();
@@ -327,6 +333,38 @@ async function recomputeLeaderboards(): Promise<void> {
   });
 }
 
+/**
+ * Materializes per-player board ranks into rank_pop + rank_meta (see
+ * rankPopSelectSql in boards.ts for the layout and the why). The build runs
+ * against _next staging tables so readers never see a partial state; the swap
+ * is a single transaction of renames. web_ro's SELECT grant is re-applied
+ * inside the swap because the tables are recreated from scratch each pass.
+ *
+ * This is the heavy end of the pass (~36 window sorts over ~600k rows) — it
+ * replaces the old per-page-view live rank query on the web side, which grew
+ * linearly with the corpus and saturated the DB under crawler traffic.
+ */
+async function recomputeRankPop(): Promise<void> {
+  await db.execute(sql.raw("drop table if exists rank_pop_next, rank_meta_next"));
+  await db.transaction(async (tx) => {
+    // the window sorts thrash temp files at the default work_mem; give this
+    // build (and nothing else) room to sort in memory
+    await tx.execute(sql.raw("set local work_mem = '256MB'"));
+    await tx.execute(sql.raw(`create table rank_pop_next as ${rankPopSelectSql()}`));
+  });
+  await db.execute(sql.raw("create index on rank_pop_next (steamid)"));
+  await db.execute(
+    sql.raw(`create table rank_meta_next as ${rankMetaSelectSql("rank_pop_next")}`),
+  );
+  await db.execute(sql.raw("analyze rank_pop_next"));
+  await db.transaction(async (tx) => {
+    await tx.execute(sql.raw("drop table if exists rank_pop, rank_meta"));
+    await tx.execute(sql.raw("alter table rank_pop_next rename to rank_pop"));
+    await tx.execute(sql.raw("alter table rank_meta_next rename to rank_meta"));
+    await tx.execute(sql.raw("grant select on rank_pop, rank_meta to web_ro"));
+  });
+}
+
 async function main(): Promise<void> {
   console.log("analyser started");
   for (;;) {
@@ -337,8 +375,9 @@ async function main(): Promise<void> {
       await recordUsageHistory();
       await recomputeWeaponStats();
       await recomputeLeaderboards();
+      await recomputeRankPop();
       console.log(
-        `botness + usage_stats (+ history) + weapon_class_stats + leaderboard_entries recomputed in ${Date.now() - start}ms`,
+        `botness + usage_stats (+ history) + weapon_class_stats + leaderboard_entries + rank_pop recomputed in ${Date.now() - start}ms`,
       );
     } catch (err) {
       console.error("analyser run failed:", err);

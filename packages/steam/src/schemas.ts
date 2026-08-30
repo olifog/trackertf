@@ -95,7 +95,10 @@ export const gameServerSchema = z.object({
   gameport: z.number(),
   steamid: z.string(),
   name: z.string(),
-  map: z.string(),
+  // a handful of idle servers (empty MvM test boxes) report NO map at all;
+  // one such entry must not fail the whole 2k-server array parse (it silently
+  // killed the empty-community scan leg for a week)
+  map: z.string().default(""),
   gametype: z.string().optional(),
   region: z.number().optional(),
   players: z.number(),

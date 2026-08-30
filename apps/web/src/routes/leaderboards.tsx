@@ -1,4 +1,4 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 import { FilterRow, Segmented } from "#/components/ui/filter-bar";
@@ -83,11 +83,21 @@ export const Route = createFileRoute("/leaderboards")({
   validateSearch: searchSchema,
   search: { middlewares: [stripSearchParams({ board: "hours" })] },
   loaderDeps: ({ search }) => search,
-  loader: ({ context, deps }) =>
-    Promise.all([
+  loader: ({ context, deps }) => {
+    // Block navigation (SSR data / pending skeleton) only when no leaderboard
+    // query holds data yet. Board switches on the page resolve instantly and
+    // keep the old rows under a fetching overlay (keepPreviousData).
+    const hasData = context.queryClient
+      .getQueriesData({ queryKey: ["leaderboard"] })
+      .some(([, data]) => data !== undefined);
+    const ensured = Promise.all([
       context.queryClient.ensureQueryData(leaderboardQueryOptions(deps.board)),
       context.queryClient.ensureQueryData(boardDistributionQueryOptions(deps.board)),
-    ]),
+    ]);
+    if (!hasData) return ensured;
+    ensured.catch(() => {});
+    return undefined;
+  },
   component: LeaderboardsPage,
 });
 
@@ -160,6 +170,7 @@ function Segment({
     <Link
       from={Route.fullPath}
       search={(prev) => ({ ...prev, board })}
+      resetScroll={false}
       title={title}
       className={`flex h-9 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
         active
@@ -193,6 +204,7 @@ function BoardPill({
     <Link
       from={Route.fullPath}
       search={(prev) => ({ ...prev, board })}
+      resetScroll={false}
       title={title}
       className={`inline-flex h-8 items-center rounded-md border px-2.5 text-[13px] leading-none whitespace-nowrap transition-colors ${
         active
@@ -215,7 +227,10 @@ function ThresholdSlider({ def }: { def: BoardDef }) {
   );
   const commit = (i: number) => {
     const next = RATE_THRESHOLD_HOURS[i] ?? DEFAULT_RATE_HOURS;
-    void navigate({ search: (prev) => ({ ...prev, board: boardKeyFor(def, def.scope, next) }) });
+    void navigate({
+      search: (prev) => ({ ...prev, board: boardKeyFor(def, def.scope, next) }),
+      resetScroll: false,
+    });
   };
   return (
     <div className="w-full max-w-72 pt-1">
@@ -246,9 +261,18 @@ function ThresholdSlider({ def }: { def: BoardDef }) {
 
 function LeaderboardsPage() {
   const { board } = Route.useSearch();
-  const { data } = useSuspenseQuery(leaderboardQueryOptions(board));
-  const { data: distribution } = useSuspenseQuery(boardDistributionQueryOptions(board));
-  const { rows, participants } = data;
+  const query = useQuery({
+    ...leaderboardQueryOptions(board),
+    placeholderData: keepPreviousData,
+  });
+  const distQuery = useQuery({
+    ...boardDistributionQueryOptions(board),
+    placeholderData: keepPreviousData,
+  });
+  const rows = query.data?.rows ?? [];
+  const participants = query.data?.participants ?? null;
+  const distribution = distQuery.data;
+  const updating = query.isPlaceholderData || distQuery.isPlaceholderData;
   const def = boardDef(board);
   const strange = isStrangeBoard(board);
   const perClass = def.scope !== "overall";
@@ -262,7 +286,8 @@ function LeaderboardsPage() {
       ? STRANGE_BOARDS
       : bucket === "per_hour"
         ? BOARDS.filter(
-            (b) => b.scope === def.scope && b.kind === "per_hour" && b.minRateHours === currentHours,
+            (b) =>
+              b.scope === def.scope && b.kind === "per_hour" && b.minRateHours === currentHours,
           )
         : BOARDS.filter((b) => b.scope === def.scope && b.kind === "total");
 
@@ -273,7 +298,9 @@ function LeaderboardsPage() {
         <InfoTip className="ml-1.5">
           Among crawled players with public profiles, no VAC bans. Sample skews connected and
           veteran players.
-          {strange && <> Counts come from players' currently equipped Strange (quality 11) items.</>}
+          {strange && (
+            <> Counts come from players' currently equipped Strange (quality 11) items.</>
+          )}
           {def.kind === "per_hour" && <> Rate boards require {currentHours}+ hours on the scope.</>}
         </InfoTip>
       </h1>
@@ -357,76 +384,86 @@ function LeaderboardsPage() {
         </p>
       )}
 
-      {!strange && (
-        <div className="rounded-lg border bg-card/50 p-4">
-          <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-            {def.valueLabel} by percentile
-            <InfoTip>Board value at each percentile of the qualifying-player population.</InfoTip>
+      <div className="relative space-y-5">
+        {!strange && distribution && (
+          <div className="rounded-lg border bg-card/50 p-4">
+            <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+              {def.valueLabel} by percentile
+              <InfoTip>Board value at each percentile of the qualifying-player population.</InfoTip>
+            </div>
+            <BoardDistributionChart points={distribution.points} valueLabel={def.valueLabel} />
           </div>
-          <BoardDistributionChart points={distribution.points} valueLabel={def.valueLabel} />
-        </div>
-      )}
+        )}
 
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="w-10 text-right">#</TableHead>
-            <TableHead className="w-9" />
-            <TableHead>Player</TableHead>
-            {perClass && <TableHead className="w-24">Class</TableHead>}
-            <TableHead className="w-36 text-right">{def.valueLabel}</TableHead>
-            <TableHead className="w-24 text-right">Percentile</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => (
-            <TableRow key={row.steamid} className="h-9">
-              <TableCell className="py-1 text-right font-mono text-muted-foreground">
-                {row.rank}
-              </TableCell>
-              <TableCell className="py-0.5">
-                {avatarUrl(row.avatarHash) && (
-                  <img
-                    src={avatarUrl(row.avatarHash) as string}
-                    alt=""
-                    className="h-6 w-6 rounded-sm"
-                    loading="lazy"
-                  />
-                )}
-              </TableCell>
-              <TableCell className="py-1">
-                <Link
-                  to="/player/$steamid"
-                  params={{ steamid: row.steamid }}
-                  className="hover:underline"
-                >
-                  {row.personaname ?? row.steamid}
-                </Link>
-              </TableCell>
-              {perClass && (
-                <TableCell className="py-1 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1.5">
-                    {CLASS_NAMES[def.scope as number] && (
-                      <img
-                        src={`/${CLASS_NAMES[def.scope as number]}.svg`}
-                        alt=""
-                        className="h-3.5 w-3.5"
-                      />
-                    )}
-                    {CLASS_NAMES[def.scope as number]}
-                  </span>
-                </TableCell>
-              )}
-              <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
-                {formatValue(row.value, def.decimals)}
-              </TableCell>
-              <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
-                {participants ? `top ${((100 * row.rank) / participants).toFixed(1)}%` : "-"}
-              </TableCell>
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-10 text-right">#</TableHead>
+              <TableHead className="w-9" />
+              <TableHead>Player</TableHead>
+              {perClass && <TableHead className="w-24">Class</TableHead>}
+              <TableHead className="w-36 text-right">{def.valueLabel}</TableHead>
+              <TableHead className="w-24 text-right">Percentile</TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={row.steamid} className="h-9">
+                <TableCell className="py-1 text-right font-mono text-muted-foreground">
+                  {row.rank}
+                </TableCell>
+                <TableCell className="py-0.5">
+                  {avatarUrl(row.avatarHash) && (
+                    <img
+                      src={avatarUrl(row.avatarHash) as string}
+                      alt=""
+                      className="h-6 w-6 rounded-sm"
+                      loading="lazy"
+                    />
+                  )}
+                </TableCell>
+                <TableCell className="py-1">
+                  <Link
+                    to="/player/$steamid"
+                    params={{ steamid: row.steamid }}
+                    className="hover:underline"
+                  >
+                    {row.personaname ?? row.steamid}
+                  </Link>
+                </TableCell>
+                {perClass && (
+                  <TableCell className="py-1 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1.5">
+                      {CLASS_NAMES[def.scope as number] && (
+                        <img
+                          src={`/${CLASS_NAMES[def.scope as number]}.svg`}
+                          alt=""
+                          className="h-3.5 w-3.5"
+                        />
+                      )}
+                      {CLASS_NAMES[def.scope as number]}
+                    </span>
+                  </TableCell>
+                )}
+                <TableCell className="py-1 text-right font-mono text-sm tabular-nums">
+                  {formatValue(row.value, def.decimals)}
+                </TableCell>
+                <TableCell className="py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">
+                  {participants ? `top ${((100 * row.rank) / participants).toFixed(1)}%` : "-"}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        {updating && (
+          <div className="absolute inset-0 z-10 flex items-start justify-center rounded-md bg-background/60 pt-24 backdrop-blur-[1px]">
+            <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm text-muted-foreground shadow-sm">
+              <span className="size-4 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-foreground" />
+              Updating…
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

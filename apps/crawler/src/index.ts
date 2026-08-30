@@ -284,7 +284,23 @@ async function crawlOne({ steamid, source }: FrontierItem): Promise<void> {
     }
   }
 
-  const items = unwrapOrThrow(steamid, await steam.getPlayerItems(steamid));
+  // Known-private backpacks: don't burn the full 3-attempt 503 probe on every
+  // recrawl (2 wasted calls per private player per cycle, ~31% of item calls
+  // were 503s). One attempt suffices — if they've since gone public the first
+  // call succeeds, and a transient-503 misread self-corrects next recrawl.
+  let itemsAttempts: number | undefined;
+  if (source === "recrawl") {
+    const [prev] = await db
+      .select({ itemsStatus: schema.players.itemsStatus })
+      .from(schema.players)
+      .where(eq(schema.players.steamid, steamid))
+      .limit(1);
+    if (prev?.itemsStatus === "private") itemsAttempts = 1;
+  }
+  const items = unwrapOrThrow(
+    steamid,
+    await steam.getPlayerItems(steamid, { maxAttempts: itemsAttempts ?? 3 }),
+  );
 
   await db.transaction(async (tx) => {
     await tx
@@ -363,6 +379,13 @@ async function crawlOne({ steamid, source }: FrontierItem): Promise<void> {
     playtime.data.minutes > EXPAND_MIN_MINUTES;
   if (shouldExpand) {
     const friends = unwrapOrThrow(steamid, await steam.getFriendList(steamid));
+    // record the outcome either way — friends_status was silently never
+    // written, leaving it NULL for the whole corpus (NULL now honestly means
+    // "friend fetch not attempted", i.e. the player didn't qualify to expand)
+    await db
+      .update(schema.players)
+      .set({ friendsStatus: friends.kind })
+      .where(eq(schema.players.steamid, steamid));
     if (friends.kind === "ok") {
       await db
         .insert(schema.playerFriendsRaw)

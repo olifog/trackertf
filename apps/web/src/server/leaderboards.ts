@@ -6,11 +6,9 @@ import {
   type BoardDef,
   boardCountSql,
   boardSelectSql,
-  hoursRankSql,
   METRICS,
-  playerRanksAggSql,
-  playerRanksSql,
   RATE_THRESHOLD_HOURS,
+  rankLookupSql,
 } from "@trackertf/db/boards";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -250,31 +248,37 @@ export interface PlayerRankRow {
 }
 
 /**
- * The player's live rank on every board. One pass over player_class_stats that
- * counts, per scope, how many players are ahead of this player on each board
- * (playerRanksSql + playerRanksAggSql), plus one pass over players for the hours
- * board. Sorted by rank percentile, best first.
+ * The player's rank on every board, read from the analyser-precomputed
+ * rank_pop/rank_meta tables (see rankPopSelectSql in boards.ts) with one
+ * indexed lookup — ~10 rows, one per scope. Sorted by rank percentile, best
+ * first. Ranks are as fresh as the last analyser pass (~15-30 min), same as
+ * the leaderboards themselves.
  *
- * The rank pass deliberately avoids ranking the whole population: an earlier
- * window-function version sorted millions of population×board rows on disk and
- * took ~22s. See playerRanksSql/playerRanksAggSql in boards.ts.
+ * Earlier versions ranked the live corpus per page view; that cost grew
+ * linearly with the crawl (3.5-6.5s at 580k player_class_stats rows) and
+ * bot-crawled player pages pinned the DB at 100% CPU for two days. Never
+ * rank the population inside a request handler again.
+ *
+ * Fails soft to no ranks if the tables don't exist yet (first deploy before
+ * the analyser's first pass) — the player page renders without the section.
  */
 export const fetchPlayerRanks = createServerFn({ method: "GET" })
   .validator(z.object({ steamid: z.string().regex(/^\d{17}$/) }))
   .handler(async ({ data }): Promise<PlayerRankRow[]> => {
     const db = getDb();
-    const [scopeRows, hoursRows] = await Promise.all([
-      db.execute(sql`
-        ${sql.raw(playerRanksSql())}
-        , me as (select * from scoped where steamid = ${data.steamid})
-        ${sql.raw(playerRanksAggSql())}
-      `) as unknown as Promise<Record<string, unknown>[]>,
-      db.execute(sql`
-        select rnk, participants, value
-        from (${sql.raw(hoursRankSql())}) h
-        where h.steamid = ${data.steamid}
-      `) as unknown as Promise<Record<string, unknown>[]>,
-    ]);
+    let rows: Record<string, unknown>[];
+    try {
+      rows = (await db.execute(sql`
+        ${sql.raw(rankLookupSql())}
+        where s.steamid = ${data.steamid}
+      `)) as unknown as Record<string, unknown>[];
+    } catch (err) {
+      console.error(`fetchPlayerRanks failed for ${data.steamid}:`, err);
+      return [];
+    }
+
+    const scopeRows = rows.filter((r) => Number(r["scope"]) >= 0);
+    const hoursRow = rows.find((r) => Number(r["scope"]) === -1);
 
     const ranks: PlayerRankRow[] = [];
     // Each row is one scope (0 = overall, N = class N); un-pivot into per-board
@@ -315,15 +319,16 @@ export const fetchPlayerRanks = createServerFn({ method: "GET" })
         }
       }
     }
-    const hours = hoursRows[0];
-    if (hours) {
+    // scope -1 = the tf2_minutes hours board; its playtime column holds
+    // tf2_minutes*60, so /3600 recovers hours (see rankPopSelectSql)
+    if (hoursRow) {
       const def = BOARD_MAP.get("hours") as BoardDef;
       ranks.push({
         boardKey: def.key,
         label: def.label,
-        rank: hours["rnk"] as number,
-        of: hours["participants"] as number,
-        value: hours["value"] as number,
+        rank: Number(hoursRow["rt_playtime"]),
+        of: Number(hoursRow["p_total"]),
+        value: Number(hoursRow["me_playtime"]) / 3600,
       });
     }
     // guard against a 0-participant board: rank/of would be NaN and poison the

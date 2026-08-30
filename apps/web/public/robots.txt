@@ -1,0 +1,8 @@
+# tracker.tf — please index the aggregate stats pages, not the long tail.
+# /player/* is one page per crawled Steam account (140k+ and growing) and each
+# render costs real database work; crawling them serially melted the site once.
+User-agent: *
+Disallow: /player/
+Disallow: /_serverFn/
+Disallow: /api/
+Crawl-delay: 10

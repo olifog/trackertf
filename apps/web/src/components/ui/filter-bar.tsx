@@ -36,3 +36,29 @@ export function FilterRow({ label, children }: { label: string; children: React.
     </div>
   );
 }
+
+/**
+ * Small client-side text-filter input for long lists (per-map tables etc.).
+ * Same visual language as the route filter cards' search inputs; purely local
+ * state — it never touches the URL.
+ */
+export function ListFilterInput({
+  value,
+  onChange,
+  placeholder,
+  className,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  return (
+    <input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className={`h-8 w-56 rounded-md border bg-secondary/40 px-2 font-mono text-xs outline-none placeholder:text-muted-foreground/60 focus:border-ring ${className ?? ""}`}
+    />
+  );
+}

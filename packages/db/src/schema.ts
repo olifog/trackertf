@@ -405,6 +405,10 @@ export const matchParticipants = pgTable(
     firstTimePlayed: real().notNull(),
     lastTimePlayed: real().notNull(),
     observations: smallint().notNull(),
+    /** when the attributor last scored this participant (any outcome, incl.
+     * below-threshold). NULL = never scored. Without this, sub-threshold names
+     * were re-scored every pass and the backlog could never drain. */
+    attributionCheckedAt: timestamp({ withTimezone: true }),
   },
   (t) => [primaryKey({ columns: [t.segmentId, t.name] })],
 );

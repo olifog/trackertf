@@ -1,9 +1,9 @@
-import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "#/components/ui/card";
-import { FilterRow, Segmented } from "#/components/ui/filter-bar";
+import { FilterRow, ListFilterInput, Segmented } from "#/components/ui/filter-bar";
 import {
   ChartContainer,
   type ChartConfig,
@@ -51,11 +51,23 @@ export const Route = createFileRoute("/_eco/matches")({
   validateSearch: matchLeaderFiltersSchema,
   search: { middlewares: [stripSearchParams(DEFAULT_SEARCH)] },
   loaderDeps: ({ search }) => search,
-  loader: ({ context, deps }) =>
-    Promise.all([
+  loader: ({ context, deps }) => {
+    // Block navigation (SSR data / pending skeleton) only when no scorer
+    // leaderboard query holds data yet. Filter changes on the page resolve
+    // instantly and keep the old rows under a fetching overlay
+    // (keepPreviousData); recent segments are search-independent and stay
+    // cached across filter clicks.
+    const hasData = context.queryClient
+      .getQueriesData({ queryKey: ["matchLeaderboard"] })
+      .some(([, data]) => data !== undefined);
+    const ensured = Promise.all([
       context.queryClient.ensureQueryData(recentSegmentsQueryOptions()),
       context.queryClient.ensureQueryData(matchLeaderboardQueryOptions(deps)),
-    ]),
+    ]);
+    if (!hasData) return ensured;
+    ensured.catch(() => {});
+    return undefined;
+  },
   component: MatchesPage,
 });
 
@@ -92,6 +104,7 @@ function Segment({
     <Link
       from={Route.fullPath}
       search={(prev) => ({ ...prev, ...patch })}
+      resetScroll={false}
       className={`flex h-9 items-center px-2.5 text-[13px] leading-none transition-colors sm:h-8 ${
         active
           ? "bg-primary font-medium text-primary-foreground"
@@ -366,6 +379,11 @@ function MatchDurationsSection() {
   const { data, isLoading } = useQuery(matchDurationsQueryOptions());
   const byGamemode = data?.byGamemode ?? [];
   const byMap = data?.byMap ?? [];
+  const [filter, setFilter] = useState("");
+  const needle = filter.trim().toLowerCase();
+  const visibleMaps = needle
+    ? byMap.filter((m) => (m.map ?? "").toLowerCase().includes(needle))
+    : byMap;
 
   return (
     <section className="space-y-3">
@@ -394,36 +412,51 @@ function MatchDurationsSection() {
       )}
 
       {byMap.length > 0 && (
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>Map</TableHead>
-              <TableHead className="w-40">Mode</TableHead>
-              <TableHead className="w-24 text-right">Median</TableHead>
-              <TableHead className="w-32 text-right">Typical range</TableHead>
-              <TableHead className="w-24 text-right">Matches</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {byMap.map((m: DurationRow) => (
-              <TableRow key={m.map}>
-                <TableCell className="font-mono text-xs">{m.map}</TableCell>
-                <TableCell className="text-muted-foreground">
-                  {GAMEMODE_LABELS[m.gamemode]}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {fmtDuration(m.medianSec)}
-                </TableCell>
-                <TableCell className="text-right text-muted-foreground tabular-nums">
-                  {fmtDuration(m.p25Sec)}–{fmtDuration(m.p75Sec)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {m.matches.toLocaleString()}
-                </TableCell>
+        <>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <ListFilterInput value={filter} onChange={setFilter} placeholder="filter maps…" />
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {visibleMaps.length.toLocaleString()} of {byMap.length.toLocaleString()} maps
+            </span>
+          </div>
+          <Table containerClassName="max-h-[28rem] overflow-y-auto rounded-md border">
+            <TableHeader className="sticky top-0 z-10 bg-background">
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Map</TableHead>
+                <TableHead className="w-40">Mode</TableHead>
+                <TableHead className="w-24 text-right">Median</TableHead>
+                <TableHead className="w-32 text-right">Typical range</TableHead>
+                <TableHead className="w-24 text-right">Matches</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {visibleMaps.map((m: DurationRow) => (
+                <TableRow key={m.map}>
+                  <TableCell className="font-mono text-xs">{m.map}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {GAMEMODE_LABELS[m.gamemode]}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtDuration(m.medianSec)}
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground tabular-nums">
+                    {fmtDuration(m.p25Sec)}–{fmtDuration(m.p75Sec)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {m.matches.toLocaleString()}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {visibleMaps.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-4 text-center text-muted-foreground">
+                    No maps match "{filter.trim()}".
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </>
       )}
 
       {!isLoading && byGamemode.length === 0 && (
@@ -499,6 +532,9 @@ function MapClassSection() {
   const { data, isLoading } = useQuery(mapClassPlaytimeQueryOptions());
   const maps = data?.maps ?? [];
   const [openMap, setOpenMap] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const needle = filter.trim().toLowerCase();
+  const visibleMaps = needle ? maps.filter((m) => m.map.toLowerCase().includes(needle)) : maps;
 
   return (
     <section className="space-y-3">
@@ -521,8 +557,14 @@ function MapClassSection() {
               </span>
             ))}
           </div>
-          <div className="space-y-1">
-            {maps.map((m: MapClassRow) => {
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <ListFilterInput value={filter} onChange={setFilter} placeholder="filter maps…" />
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {visibleMaps.length.toLocaleString()} of {maps.length.toLocaleString()} maps
+            </span>
+          </div>
+          <div className="max-h-[28rem] space-y-1 overflow-y-auto rounded-md border p-1">
+            {visibleMaps.map((m: MapClassRow) => {
               const isOpen = openMap === m.map;
               return (
                 <div key={m.map} className="rounded-md">
@@ -563,6 +605,11 @@ function MapClassSection() {
                 </div>
               );
             })}
+            {visibleMaps.length === 0 && (
+              <p className="px-2 py-3 text-sm text-muted-foreground">
+                No maps match "{filter.trim()}".
+              </p>
+            )}
           </div>
         </>
       )}
@@ -581,9 +628,7 @@ function MapClassSection() {
 function MapDetailPanel({ map }: { map: string }) {
   const { data, isLoading } = useQuery(mapDetailQueryOptions(map));
   if (isLoading || !data) {
-    return (
-      <div className="px-6 py-3 font-mono text-xs text-muted-foreground">loading map…</div>
-    );
+    return <div className="px-6 py-3 font-mono text-xs text-muted-foreground">loading map…</div>;
   }
   return (
     <div className="grid gap-6 rounded-b-md border-x border-b bg-card/40 px-4 py-4 lg:grid-cols-2">
@@ -682,13 +727,7 @@ function MapScorers({ scorers }: { scorers: MapScorer[] }) {
   );
 }
 
-function MapRegulars({
-  regulars,
-  regularCount,
-}: {
-  regulars: MapRegular[];
-  regularCount: number;
-}) {
+function MapRegulars({ regulars, regularCount }: { regulars: MapRegular[]; regularCount: number }) {
   return (
     <div className="space-y-2">
       <h3 className="text-sm font-semibold">Regulars</h3>
@@ -765,11 +804,22 @@ function MapWeapons({ weapons }: { weapons: MapWeapon[] }) {
   );
 }
 
+const NO_LEADERS: LeaderRow[] = [];
+
 function MatchesPage() {
   const search = Route.useSearch();
   const { data: segments } = useSuspenseQuery(recentSegmentsQueryOptions());
-  const { data: leaders } = useSuspenseQuery(matchLeaderboardQueryOptions(search));
+  const leadersQuery = useQuery({
+    ...matchLeaderboardQueryOptions(search),
+    placeholderData: keepPreviousData,
+  });
+  const leaders = leadersQuery.data ?? NO_LEADERS;
   const [openSegment, setOpenSegment] = useState<string | null>(null);
+  const [segmentFilter, setSegmentFilter] = useState("");
+  const segmentNeedle = segmentFilter.trim().toLowerCase();
+  const visibleSegments = segmentNeedle
+    ? segments.filter((s) => s.map.toLowerCase().includes(segmentNeedle))
+    : segments;
 
   const segmentIds = useMemo(() => {
     const s = new Set<string>();
@@ -833,42 +883,65 @@ function MatchesPage() {
           </FilterRow>
         </div>
 
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead className="w-10 text-right">#</TableHead>
-              <TableHead>Player</TableHead>
-              <TableHead className="w-28">Map</TableHead>
-              <TableHead className="w-28">Region</TableHead>
-              <TableHead className="w-24 text-right">Pts/hr</TableHead>
-              <TableHead className="w-20 text-right">Span</TableHead>
-              <TableHead className="w-16 text-right">Obs</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {leaders.map((row, i) => (
-              <LeaderRows
-                key={`${row.segmentId}:${row.name}`}
-                row={row}
-                rank={i + 1}
-                attribution={attr.get(attrKey(row.segmentId, row.name))}
-              />
-            ))}
-            {leaders.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
-                  No participants match these filters.
-                </TableCell>
+        <div className="relative">
+          <Table containerClassName="max-h-[36rem] overflow-y-auto rounded-md border">
+            <TableHeader className="sticky top-0 z-10 bg-background">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-10 text-right">#</TableHead>
+                <TableHead>Player</TableHead>
+                <TableHead className="w-28">Map</TableHead>
+                <TableHead className="w-28">Region</TableHead>
+                <TableHead className="w-24 text-right">Pts/hr</TableHead>
+                <TableHead className="w-20 text-right">Span</TableHead>
+                <TableHead className="w-16 text-right">Obs</TableHead>
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {leaders.map((row, i) => (
+                <LeaderRows
+                  key={`${row.segmentId}:${row.name}`}
+                  row={row}
+                  rank={i + 1}
+                  attribution={attr.get(attrKey(row.segmentId, row.name))}
+                />
+              ))}
+              {leaders.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
+                    No participants match these filters.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+          {leadersQuery.isPlaceholderData && (
+            <div className="absolute inset-0 z-10 flex items-start justify-center rounded-md bg-background/60 pt-24 backdrop-blur-[1px]">
+              <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm text-muted-foreground shadow-sm">
+                <span className="size-4 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-foreground" />
+                Updating…
+              </div>
+            </div>
+          )}
+        </div>
       </section>
 
       <section className="space-y-3">
         <h2 className="font-heading text-lg font-semibold">Recent segments</h2>
-        <Table>
-          <TableHeader>
+        {segments.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <ListFilterInput
+              value={segmentFilter}
+              onChange={setSegmentFilter}
+              placeholder="filter maps…"
+            />
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {visibleSegments.length.toLocaleString()} of {segments.length.toLocaleString()}{" "}
+              segments
+            </span>
+          </div>
+        )}
+        <Table containerClassName="max-h-[32rem] overflow-y-auto rounded-md border">
+          <TableHeader className="sticky top-0 z-10 bg-background">
             <TableRow className="hover:bg-transparent">
               <TableHead className="w-6" />
               <TableHead>Map</TableHead>
@@ -880,7 +953,7 @@ function MatchesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {segments.map((seg) => {
+            {visibleSegments.map((seg) => {
               const isOpen = openSegment === seg.segmentId;
               return (
                 <SegmentRows
@@ -898,10 +971,12 @@ function MatchesPage() {
                 />
               );
             })}
-            {segments.length === 0 && (
+            {visibleSegments.length === 0 && (
               <TableRow>
                 <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
-                  {NOT_ENOUGH_DATA}
+                  {segments.length === 0
+                    ? NOT_ENOUGH_DATA
+                    : `No segments match "${segmentFilter.trim()}".`}
                 </TableCell>
               </TableRow>
             )}

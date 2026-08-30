@@ -31,7 +31,11 @@ const INTERVAL_MS = 15 * 60_000;
 /** only attribute participants from segments started within this window */
 const ATTRIBUTE_LOOKBACK_DAYS = 14;
 /** cap participants scored per pass (self-heals across passes; logged) */
-const MAX_ATTRIBUTE_PER_PASS = 4000;
+const MAX_ATTRIBUTE_PER_PASS = 6000;
+/** a participant scored before its segment is this old gets ONE re-score after
+ * (active players' snapshots arrive on the ~8h recrawl cadence, so by now the
+ * delta-corroboration evidence for the segment is as complete as it will get) */
+const RESCORE_AFTER_HOURS = 24;
 /** confidence at/above which a name→steamid attribution is asserted */
 const ATTRIBUTION_THRESHOLD = 0.9;
 /** build stat windows from snapshots within this trailing window */
@@ -148,7 +152,16 @@ async function scoreParticipant(name: string, startedAt: Date): Promise<Scored |
   return best;
 }
 
-/** Attribute recent, not-yet-attributed participants; write >= 0.9 matches. */
+/**
+ * Attribute recent, not-yet-attributed participants; write >= 0.9 matches.
+ *
+ * Every scored participant — matched or not — is stamped with
+ * attribution_checked_at so sub-threshold names aren't re-scored forever
+ * (they used to be, which meant the pass only ever ground over the newest
+ * 4k names and the backlog grew without bound). A participant first scored
+ * while its segment was younger than RESCORE_AFTER_HOURS gets exactly one
+ * later re-score, once the snapshot evidence for its window is complete.
+ */
 async function attributeParticipants(): Promise<void> {
   const pending = (await db.execute(sql`
     select mp.segment_id, mp.name, ms.started_at
@@ -158,14 +171,20 @@ async function attributeParticipants(): Promise<void> {
       on sa.segment_id = mp.segment_id and sa.name = mp.name
     where ms.started_at > now() - make_interval(days => ${ATTRIBUTE_LOOKBACK_DAYS})
       and sa.segment_id is null
-    order by ms.started_at desc
+      and (mp.attribution_checked_at is null
+        or (mp.attribution_checked_at < ms.started_at + make_interval(hours => ${RESCORE_AFTER_HOURS})
+          and now() > ms.started_at + make_interval(hours => ${RESCORE_AFTER_HOURS})))
+    order by (mp.attribution_checked_at is null) desc, ms.started_at desc
     limit ${MAX_ATTRIBUTE_PER_PASS}
   `)) as unknown as { segment_id: string | number; name: string; started_at: string | Date }[];
 
   let written = 0;
+  const checked: { segment_id: number; name: string }[] = [];
   for (const p of pending) {
     const segmentId = Number(p.segment_id);
     const startedAt = new Date(p.started_at);
+    // stamp errors too: a name that reliably throws must not poison every pass
+    checked.push({ segment_id: segmentId, name: p.name });
     let scored: Scored | null;
     try {
       scored = await scoreParticipant(p.name, startedAt);
@@ -202,6 +221,17 @@ async function attributeParticipants(): Promise<void> {
         },
       });
     written += 1;
+  }
+  // one batched stamp for the whole pass (composite PK, so no `= any(...)`;
+  // see the drizzle array-param gotcha — jsonb_to_recordset instead)
+  if (checked.length > 0) {
+    await db.execute(sql`
+      update match_participants mp
+      set attribution_checked_at = now()
+      from jsonb_to_recordset(${JSON.stringify(checked)}::jsonb)
+        as k(segment_id bigint, name text)
+      where mp.segment_id = k.segment_id and mp.name = k.name
+    `);
   }
   const capped = pending.length === MAX_ATTRIBUTE_PER_PASS;
   console.log(

@@ -148,17 +148,27 @@ export class SteamClient {
     };
   }
 
-  async getPlayerItems(steamid: string): Promise<SteamResult<BackpackItem[]>> {
+  async getPlayerItems(
+    steamid: string,
+    opts?: {
+      /** attempts before a persistent 503 counts as private (default 3).
+       * Callers who already believe the backpack is private can pass 1 and
+       * save two calls per recrawl; a wrong "still private" self-corrects on
+       * the next recrawl. */
+      maxAttempts?: number;
+    },
+  ): Promise<SteamResult<BackpackItem[]>> {
     // This endpoint answers private backpacks with a bare 503 (verified
     // 2026-08-16) — but the TF2 GC behind it also 503s transiently under
     // load (backpack.tf measures ~40% failure in busy periods), so only a
     // 503 that persists across spaced retries counts as private.
+    const maxAttempts = opts?.maxAttempts ?? 3;
     let res: SteamResult<z.infer<typeof getPlayerItemsResponse>> = {
       kind: "error",
       status: undefined,
       message: "unreached",
     };
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, 2_000 * attempt));
       res = await this.#get(
         "/IEconItems_440/GetPlayerItems/v1/",

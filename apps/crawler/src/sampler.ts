@@ -121,18 +121,29 @@ function makeSegment(s: GameServer): Segment {
   };
 }
 
+/** Steam occasionally reports score/time_played as 4294967295 (uint32 -1
+ * sentinel) for broken entries; that overflows the int4 columns and aborted
+ * the whole participants batch insert (~10 rounds/day). Anything outside a
+ * plausible casual range is junk — zero it rather than lose the round. */
+function sanitizeCounter(v: number): number {
+  return Number.isFinite(v) && v >= 0 && v < 100_000_000 ? Math.floor(v) : 0;
+}
+
 /**
  * Duplicate names WITHIN one observation: keep the entry with the higher
  * time_played (the longer-connected client is the "real" one; the other is
  * usually a reconnect ghost). Names stay raw unicode, trimmed to 64 chars.
+ * Score/time counters are sanitized here so every downstream consumer
+ * (reset detection, lastScores, the DB rows) sees int4-safe values.
  */
 function dedupPlayers(players: FakeIpPlayer[]): Map<string, FakeIpPlayer> {
   const dedup = new Map<string, FakeIpPlayer>();
   for (const p of players) {
     const name = p.name.slice(0, 64);
     if (!name) continue;
+    const clean = { ...p, score: sanitizeCounter(p.score), time_played: sanitizeCounter(p.time_played) };
     const prev = dedup.get(name);
-    if (!prev || p.time_played > prev.time_played) dedup.set(name, p);
+    if (!prev || clean.time_played > prev.time_played) dedup.set(name, clean);
   }
   return dedup;
 }

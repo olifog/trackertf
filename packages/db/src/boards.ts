@@ -231,25 +231,62 @@ export function boardCountSql(def: BoardDef): string {
 }
 
 /**
- * CTE chain (`pop`, `scoped`) shared by the player-rank query. `scoped` holds
- * one row per (player, scope) with every metric pre-aggregated — scope 0 =
- * overall, scope N = class N. Columns are aliased to the metric names.
+ * Player ranks are PRECOMPUTED by the analyser into two derived tables, and the
+ * web app reads them with a single indexed lookup per player page:
  *
- * The caller adds a `me` CTE (this player's `scoped` rows, filtered by steamid)
- * and the aggregate in playerRanksAggSql() to derive the player's rank on every
- * board — see fetchPlayerRanks. The hours board needs a separate players-only
- * query (hoursRankSql).
+ *   rank_pop  — one row per (player, scope): the player's value on every metric
+ *               plus their rank() on every board cell. scope 0 = overall,
+ *               scope 1..9 = class, scope -1 = the tf2_minutes hours board
+ *               (its `playtime` column holds tf2_minutes*60 so value/3600 =
+ *               hours; only rt_playtime is meaningful there).
+ *   rank_meta — one row per scope: total participants (p_total) and per-hour
+ *               board participant counts (ph_<N>h).
  *
- * NB: this deliberately does NOT explode the population into one row per board
- * (metric×scope×kind ≈ 18 non-null cells per player → millions of rows). An
- * earlier version did that plus `rank() over (...)`, forcing a multi-hundred-MB
- * disk sort that took ~22s to read a single player's ranks. Instead we keep the
- * population at ~one row per (player, scope) and count betters per scope with a
- * hash aggregate (playerRanksAggSql) — sub-second.
+ * History: v1 exploded population×board rows + rank() per request (~22s), v2
+ * counted betters per scope in one hash aggregate per request (~1s at launch,
+ * but linear in corpus — at 580k player_class_stats rows it hit 3.5-6.5s with
+ * disk spills, and stacked bot traffic pinned RDS at 99% CPU for two days).
+ * Ranking the whole population is inherently O(corpus), so it now happens ONCE
+ * per analyser pass (recomputeRankPop) instead of once per page view.
  */
-export function playerRanksSql(): string {
-  const aggs = METRICS.map((m) => `sum(${METRIC_COLUMNS[m]}) as ${m}`).join(", ");
-  const cols = METRICS.map((m) => `${METRIC_COLUMNS[m]} as ${m}`).join(", ");
+
+/**
+ * SELECT materialized into rank_pop by the analyser (via CREATE TABLE ... AS).
+ * ~36 window ranks over ~one row per (player, scope); heavy, offline-only.
+ * rank() tie semantics = 1 + players strictly ahead, matching the old live
+ * per-request counts. Per-hour ranks are NULL below their playtime threshold
+ * (the player isn't on that board).
+ */
+export function rankPopSelectSql(): string {
+  const aggs = METRICS.map((m) => `sum(${METRIC_COLUMNS[m]})::bigint as ${m}`).join(", ");
+  const cols = METRICS.map((m) => `${METRIC_COLUMNS[m]}::bigint as ${m}`).join(", ");
+  const zeros = METRICS.filter((m) => m !== "playtime")
+    .map((m) => `0::bigint as ${m}`)
+    .join(", ");
+  const rt = METRICS.map(
+    (m) => `rank() over (partition by scope order by ${m} desc)::int as rt_${m}`,
+  ).join(",\n        ");
+  const rateCtes = RATE_THRESHOLD_HOURS.map((h) => {
+    const ranks = METRICS.filter((m) => m !== "playtime")
+      .map(
+        (m) =>
+          `rank() over (partition by scope order by ${m} * 3600.0 / nullif(playtime, 0) desc)::int as rh_${m}_${h}h`,
+      )
+      .join(",\n          ");
+    return `h${h} as (
+        select steamid, scope,
+          ${ranks}
+        from scoped where scope >= 0 and playtime >= ${h * 3600}
+      )`;
+  }).join(",\n      ");
+  const rateCols = RATE_THRESHOLD_HOURS.map((h) =>
+    METRICS.filter((m) => m !== "playtime")
+      .map((m) => `h${h}.rh_${m}_${h}h`)
+      .join(", "),
+  ).join(",\n        ");
+  const rateJoins = RATE_THRESHOLD_HOURS.map((h) => `left join h${h} using (steamid, scope)`).join(
+    "\n        ",
+  );
   return `
     with pop as (
       select c.* from player_class_stats c join players p using (steamid)
@@ -259,59 +296,51 @@ export function playerRanksSql(): string {
       select steamid, 0 as scope, ${aggs} from pop group by steamid
       union all
       select steamid, class_num as scope, ${cols} from pop
-    )`;
+      union all
+      select p.steamid, -1 as scope, (p.tf2_minutes::bigint * 60) as playtime, ${zeros}
+      from players p
+      where p.tf2_minutes is not null and ${POP}
+    ),
+    base as (
+      select *,
+        ${rt}
+      from scoped
+    ),
+      ${rateCtes}
+    select base.*,
+        ${rateCols}
+    from base
+        ${rateJoins}`;
 }
 
 /**
- * Aggregate over `scoped` (see playerRanksSql) joined to the caller's `me` CTE,
- * producing one row per scope the player appears in. Per board cell it emits:
- *   - `me_<metric>`  the player's own value for the scope (raw metric units)
- *   - `p_total`      total-board participant count for the scope
- *   - `rt_<metric>`  the player's rank on that scope's total board
- *   - `ph_<Nh>`      per-hour participant count for playtime threshold N
- *   - `rh_<metric>_<Nh>` the player's rank on that scope's per-hour board
- * rank = 1 + (players strictly ahead), matching SQL rank() tie semantics.
- * fetchPlayerRanks un-pivots these into one PlayerRankRow per board.
+ * SELECT materialized into rank_meta from a freshly built rank_pop staging
+ * table: per-scope participant counts (percentile denominators).
  */
-export function playerRanksAggSql(): string {
-  const cols: string[] = ["s.scope"];
-  cols.push("count(*)::int as p_total");
-  for (const m of METRICS) cols.push(`max(me.${m}) as me_${m}`);
-  for (const m of METRICS) {
-    cols.push(`(1 + count(*) filter (where s.${m} > me.${m}))::int as rt_${m}`);
-  }
-  for (const hours of RATE_THRESHOLD_HOURS) {
-    const t = hours * 3600;
-    cols.push(`count(*) filter (where s.playtime >= ${t})::int as ph_${hours}h`);
-  }
-  for (const m of METRICS) {
-    if (m === "playtime") continue;
-    for (const hours of RATE_THRESHOLD_HOURS) {
-      const t = hours * 3600;
-      cols.push(
-        `(1 + count(*) filter (where s.playtime >= ${t} and ` +
-          `s.${m} * 3600.0 / nullif(s.playtime, 0) > me.${m} * 3600.0 / nullif(me.playtime, 0)))::int ` +
-          `as rh_${m}_${hours}h`,
-      );
-    }
-  }
-  return `
-    select ${cols.join(",\n      ")}
-    from scoped s
-    join me on me.scope = s.scope
-    group by s.scope`;
+export function rankMetaSelectSql(fromTable: string): string {
+  const phs = RATE_THRESHOLD_HOURS.map(
+    (h) => `count(*) filter (where playtime >= ${h * 3600})::int as ph_${h}h`,
+  ).join(", ");
+  return `select scope, count(*)::int as p_total, ${phs} from ${fromTable} group by scope`;
 }
 
 /**
- * Rank query for the tf2_minutes hours board (one pass over players).
- * Selects (steamid, rnk, participants, value) — filter by steamid outside.
+ * Per-player lookup over rank_pop ⋈ rank_meta (filter by steamid as a bind
+ * param outside). Aliases the value columns to me_<metric> to keep the web
+ * un-pivot loop's row shape.
  */
-export function hoursRankSql(): string {
+export function rankLookupSql(): string {
+  const me = METRICS.map((m) => `s.${m} as me_${m}`).join(", ");
+  const rt = METRICS.map((m) => `s.rt_${m}`).join(", ");
+  const rh = METRICS.filter((m) => m !== "playtime")
+    .flatMap((m) => RATE_THRESHOLD_HOURS.map((h) => `s.rh_${m}_${h}h`))
+    .join(", ");
+  const ph = RATE_THRESHOLD_HOURS.map((h) => `m.ph_${h}h`).join(", ");
   return `
-    select p.steamid,
-      rank() over (order by p.tf2_minutes desc)::int as rnk,
-      count(*) over ()::int as participants,
-      (p.tf2_minutes / 60.0)::real as value
-    from players p
-    where p.tf2_minutes is not null and ${POP}`;
+    select s.scope, ${me},
+      ${rt},
+      ${rh},
+      m.p_total, ${ph}
+    from rank_pop s
+    join rank_meta m using (scope)`;
 }
