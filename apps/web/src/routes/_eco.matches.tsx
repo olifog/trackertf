@@ -424,6 +424,13 @@ function classColor(classNum: number): string {
   return CLASS_COLORS[(classNum - 1) % CLASS_COLORS.length] ?? "var(--muted-foreground)";
 }
 
+/** the in-game class order (Scout→Spy), for the fixed-order mix-bar mode */
+const TF2_CLASS_ORDER = [1, 3, 7, 4, 6, 9, 5, 2, 8];
+const classOrderIndex = (classNum: number): number => {
+  const i = TF2_CLASS_ORDER.indexOf(classNum);
+  return i === -1 ? TF2_CLASS_ORDER.length : i;
+};
+
 /** A row of the merged per-map table: class mix from the attributor
  * (server/mapClass.ts) joined with match-length stats from boundary-witnessed
  * segments (server/matchDurations.ts). The two datasets accrue independently
@@ -454,6 +461,8 @@ function MapsSection() {
   const mixMaps = mixQuery.data?.maps ?? NO_MIX_MAPS;
   const isLoading = durationsQuery.isLoading || mixQuery.isLoading;
   const [openMap, setOpenMap] = useState<string | null>(null);
+  /** true = every mix bar renders Scout→Spy so maps compare segment-for-segment */
+  const [fixedOrder, setFixedOrder] = useState(false);
 
   const merged = useMemo(() => {
     const byMap = new Map<string, MergedMapRow>();
@@ -504,7 +513,7 @@ function MapsSection() {
       {merged.length > 0 && (
         <>
           {mixMaps.length > 0 && (
-            <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               {Object.entries(CLASS_NAMES).map(([n, label]) => (
                 <span key={n} className="inline-flex items-center gap-1.5 text-[11px]">
                   <span
@@ -514,6 +523,18 @@ function MapsSection() {
                   {label}
                 </span>
               ))}
+              <button
+                type="button"
+                onClick={() => setFixedOrder((v) => !v)}
+                title="Keep every bar in the same Scout→Spy order so maps compare visually, instead of most-played first"
+                className={`ml-auto inline-flex h-6 items-center rounded border px-2 font-mono text-[11px] transition-colors ${
+                  fixedOrder
+                    ? "border-primary/40 bg-primary/15 text-primary"
+                    : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                fixed class order
+              </button>
             </div>
           )}
           <FilterableList items={merged} filterBy={(m) => m.map} noun="maps">
@@ -535,6 +556,7 @@ function MapsSection() {
                     <MergedMapRows
                       key={row.map}
                       row={row}
+                      fixedOrder={fixedOrder}
                       isOpen={openMap === row.map}
                       onToggle={() => setOpenMap(openMap === row.map ? null : row.map)}
                     />
@@ -567,16 +589,27 @@ function MissingCell() {
   return <span className="text-muted-foreground/50">—</span>;
 }
 
+/** a mix-bar segment shows its class emblem only once it's wide enough */
+const SEGMENT_ICON_MIN_SHARE = 0.08;
+
 /** One merged map row (click to expand the MapDetailPanel underneath). */
 function MergedMapRows({
   row,
+  fixedOrder,
   isOpen,
   onToggle,
 }: {
   row: MergedMapRow;
+  /** render the mix bar Scout→Spy instead of most-played first */
+  fixedOrder: boolean;
   isOpen: boolean;
   onToggle: () => void;
 }) {
+  const mixClasses = row.mix
+    ? fixedOrder
+      ? row.mix.classes.toSorted((a, b) => classOrderIndex(a.classNum) - classOrderIndex(b.classNum))
+      : row.mix.classes
+    : [];
   return (
     <>
       <TableRow className="h-10 cursor-pointer" onClick={onToggle}>
@@ -592,16 +625,25 @@ function MergedMapRows({
         <TableCell className="py-1">
           {row.mix ? (
             <span className="flex h-4 w-full min-w-40 overflow-hidden rounded bg-secondary/40">
-              {row.mix.classes.map((c) => (
+              {mixClasses.map((c) => (
                 <span
                   key={c.classNum}
-                  className="h-full"
+                  className="flex h-full items-center justify-center overflow-hidden"
                   style={{
                     width: `${c.share * 100}%`,
                     backgroundColor: classColor(c.classNum),
                   }}
                   title={`${CLASS_NAMES[c.classNum] ?? c.classNum}: ${fmtDuration(c.seconds)} (${(c.share * 100).toFixed(0)}%)`}
-                />
+                >
+                  {c.share >= SEGMENT_ICON_MIN_SHARE && CLASS_NAMES[c.classNum] !== undefined && (
+                    <img
+                      src={`/${CLASS_NAMES[c.classNum]}.svg`}
+                      alt=""
+                      className="h-3 w-3 shrink-0"
+                      style={{ filter: "drop-shadow(0 0 1px rgba(0,0,0,0.9))" }}
+                    />
+                  )}
+                </span>
               ))}
             </span>
           ) : (
