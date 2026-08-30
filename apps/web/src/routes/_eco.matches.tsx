@@ -21,7 +21,7 @@ import {
 } from "#/components/ui/table";
 import { InfoTip } from "#/components/ui/info-tip";
 import { NOT_ENOUGH_DATA } from "#/lib/copy";
-import { avatarUrl } from "#/lib/tf2";
+import { avatarUrl, classColor } from "#/lib/tf2";
 import { type DurationRow, matchDurationsQueryOptions } from "#/server/matchDurations";
 import { type MapClassRow, mapClassPlaytimeQueryOptions } from "#/server/mapClass";
 import {
@@ -405,24 +405,6 @@ const CLASS_NAMES: Record<number, string> = {
   8: "Spy",
   9: "Engineer",
 };
-
-// 9-hue categorical palette (Tableau-10 derived), indexed by classNum-1. Chosen
-// for mutual contrast and adequate legibility in both light and dark themes.
-const CLASS_COLORS = [
-  "#4e79a7",
-  "#f28e2b",
-  "#e15759",
-  "#76b7b2",
-  "#59a14f",
-  "#edc948",
-  "#b07aa1",
-  "#ff9da7",
-  "#9c755f",
-] as const;
-
-function classColor(classNum: number): string {
-  return CLASS_COLORS[(classNum - 1) % CLASS_COLORS.length] ?? "var(--muted-foreground)";
-}
 
 /** the in-game class order (Scout→Spy), for the fixed-order mix-bar mode */
 const TF2_CLASS_ORDER = [1, 3, 7, 4, 6, 9, 5, 2, 8];

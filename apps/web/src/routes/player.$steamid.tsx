@@ -17,6 +17,7 @@ import { qualityColor, qualityName } from "#/lib/quality";
 import {
   avatarUrl,
   CLASS_NAMES,
+  classColor,
   formatAgo,
   formatHours,
   itemDisplayName,
@@ -245,6 +246,7 @@ function PlayerPage() {
   }
 
   const totalClassSeconds = p.classStats.reduce((a, c) => a + c.playtimeSeconds, 0);
+  const maxClassSeconds = p.classStats.reduce((a, c) => Math.max(a, c.playtimeSeconds), 0);
   const sortedStats = p.classStats.toSorted((a, b) => b.playtimeSeconds - a.playtimeSeconds);
 
   return (
@@ -311,8 +313,21 @@ function PlayerPage() {
             <TableBody>
               {sortedStats.map((c) => (
                 <TableRow key={c.classNum} className="h-9">
-                  <TableCell className="py-1">
-                    <span className="flex items-center gap-2">
+                  <TableCell className="relative overflow-hidden py-1">
+                    {/* share bar behind the name: width is the class's fraction
+                        of the player's most-played class (same palette as the
+                        maps mix bars), so rows read as an inline bar chart */}
+                    {maxClassSeconds > 0 && c.playtimeSeconds > 0 && (
+                      <span
+                        aria-hidden
+                        className="absolute inset-y-1.5 left-0 rounded-r-sm opacity-25"
+                        style={{
+                          width: `${(c.playtimeSeconds / maxClassSeconds) * 100}%`,
+                          backgroundColor: classColor(c.classNum),
+                        }}
+                      />
+                    )}
+                    <span className="relative flex items-center gap-2">
                       {CLASS_NAMES[c.classNum] && (
                         <img src={`/${CLASS_NAMES[c.classNum]}.svg`} alt="" className="h-4 w-4" />
                       )}

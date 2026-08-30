@@ -10,6 +10,25 @@ export const CLASS_NAMES: Record<number, string> = {
   9: "Engineer",
 };
 
+// 9-hue categorical palette (Tableau-10 derived), indexed by classNum-1. Chosen
+// for mutual contrast and adequate legibility in both light and dark themes.
+// Shared by every class-share visual (matches mix bars, player class table).
+const CLASS_COLORS = [
+  "#4e79a7",
+  "#f28e2b",
+  "#e15759",
+  "#76b7b2",
+  "#59a14f",
+  "#edc948",
+  "#b07aa1",
+  "#ff9da7",
+  "#9c755f",
+] as const;
+
+export function classColor(classNum: number): string {
+  return CLASS_COLORS[(classNum - 1) % CLASS_COLORS.length] ?? "var(--muted-foreground)";
+}
+
 export const SLOT_NAMES: Record<number, string> = {
   0: "Primary",
   1: "Secondary",
