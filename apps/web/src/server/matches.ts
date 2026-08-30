@@ -258,8 +258,12 @@ export const matchLeaderboardQueryOptions = (filters: MatchLeaderFilters) =>
  * Sampled names are in-game display names, never linked steamids. We surface
  * ranked PROFILE CANDIDATES, never a single asserted identity. Evidence, in
  * order of weight:
- *   - name        : exact normalized match, else pg_trgm similarity (the only
- *                   hard key we have; TF2 names are highly non-unique).
+ *   - name        : HARD raw-name equality (case/emoji-sensitive, invisible
+ *                   chars stripped — see exactKey). Every candidate shown IS
+ *                   the observed name; ranking below only orders same-named
+ *                   profiles. (Fuzzy trgm recall was dropped 2026-08-30: TF2's
+ *                   in-game name is the Steam persona verbatim, so near-misses
+ *                   were noise, not evidence.)
  *   - stat-delta  : did the candidate's tracked lifetime playtime increase
  *                   across a stat-snapshot pair that brackets the segment start?
  *                   If so they were provably playing TF2 during the window —
@@ -311,6 +315,15 @@ function normalizeName(raw: string): string {
 
 const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
 
+/** the HARD candidate key: raw name, case- and emoji-sensitive, with only
+ * invisible junk (zero-width chars, bidi controls, BOM) stripped and ends
+ * trimmed. TF2's in-game name IS the Steam persona, so anything that differs
+ * visibly ("WILSON" for "Wilson", "willy wilson") is a different string and
+ * was never real evidence — fuzzy candidates just added noise to the panel. */
+function exactKey(raw: string): string {
+  return raw.replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, "").trim();
+}
+
 export const resolveParticipant = createServerFn({ method: "GET" })
   .validator(
     z.object({
@@ -320,14 +333,18 @@ export const resolveParticipant = createServerFn({ method: "GET" })
   )
   .handler(async ({ data }): Promise<ParticipantMatch> => {
     const norm = normalizeName(data.name);
+    const exact = exactKey(data.name);
     const db = getDb();
 
     // The segment context (ClickHouse) and the candidate-profile lookup
     // (Postgres) are independent round trips against different stores — issue
     // them concurrently. Candidate lookup is skipped when the name normalizes
     // empty (nothing to match), matching the original early-return semantics.
-    // The GIN pg_trgm index on lower(personaname) serves the `%` fuzzy
-    // predicate; exact normalized matches always pass it.
+    // Candidates are a HARD raw-name match (see exactKey): the normalized
+    // functional index (players_personaname_norm_idx) narrows to same-name-
+    // modulo-case rows, then the raw comparison keeps only true case/emoji-
+    // sensitive equals. Fuzzy trgm candidates ("WiLSoN", "willy wilson") were
+    // never evidence and only diluted the panel.
     const [ctxRows, candRows] = await Promise.all([
       chQuery<Record<string, unknown>>(
         getCh(),
@@ -338,16 +355,16 @@ export const resolveParticipant = createServerFn({ method: "GET" })
         where segment_id = {segmentId:UInt64} and name = {name:String}`,
         { segmentId: data.segmentId, name: data.name },
       ),
-      norm.length === 0
+      norm.length === 0 || exact.length === 0
         ? Promise.resolve([] as Record<string, unknown>[])
         : (db.execute(sql`
             select steamid, personaname, avatar_hash, loccountrycode, tf2_minutes_2wk,
-              similarity(lower(personaname), ${norm}) as sim,
-              (regexp_replace(lower(btrim(personaname)), '\\s+', ' ', 'g') = ${norm}) as exact
+              1.0 as sim, true as exact
             from players
             where personaname is not null
-              and lower(personaname) % ${norm}
-            order by exact desc, sim desc
+              and regexp_replace(lower(btrim(personaname)), '\\s+', ' ', 'g') = ${norm}
+              and btrim(regexp_replace(personaname,
+                '[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]', '', 'g')) = ${exact}
             limit 50
           `) as unknown as Promise<Record<string, unknown>[]>),
     ]);

@@ -177,9 +177,44 @@ export const fetchMapDetail = createServerFn({ method: "GET" })
 
     // 4) indirect "what the regulars run" — global loadouts of the map's
     //    regulars. Only when there are enough of them to mean anything.
+    // Fail-soft: the weapons panel is the most decorative surface here — a CH
+    // or schema hiccup in it must degrade to "no weapons", never 500 the whole
+    // map panel (which the UI renders as a stuck "loading map…").
     let weapons: MapWeapon[] = [];
+    try {
+      weapons = await regularsWeapons(db, regularRows, regularCount);
+    } catch (err) {
+      console.error(`fetchMapDetail weapons failed for ${map}:`, err);
+    }
+
+    return {
+      map,
+      gamemode,
+      classMix,
+      totalSeconds,
+      classPlayers,
+      windows,
+      topScorers,
+      regulars,
+      regularCount,
+      weapons,
+    };
+  });
+
+/** the map regulars' global loadouts (see the `weapons` doc note above) */
+async function regularsWeapons(
+  db: ReturnType<typeof getDb>,
+  regularRows: Record<string, unknown>[],
+  regularCount: number,
+): Promise<MapWeapon[]> {
+  let weapons: MapWeapon[] = [];
+  {
     if (regularCount >= WEAPONS_MIN_REGULARS) {
-      const ids = regularRows.map((r) => String(r["steamid"]));
+      // BigInt, not string: the CH client serializes string[] with quoted
+      // elements, which Array(UInt64) can't parse — that 500'd this whole fn
+      // (an endless "loading map…") on any map with >= 12 regulars. Steamids
+      // don't fit in a JS number, so BigInt is the honest UInt64 carrier.
+      const ids = regularRows.map((r) => BigInt(String(r["steamid"])));
       // weapon slots only (0-6); group by weapon group id, count distinct
       // regulars, keep a representative defindex to resolve name/image in PG.
       const gidRows = await chQuery<Record<string, unknown>>(
@@ -223,20 +258,9 @@ export const fetchMapDetail = createServerFn({ method: "GET" })
         // only the ones we could name so the panel reads cleanly
         .filter((w) => !w.name.startsWith("#"));
     }
-
-    return {
-      map,
-      gamemode,
-      classMix,
-      totalSeconds,
-      classPlayers,
-      windows,
-      topScorers,
-      regulars,
-      regularCount,
-      weapons,
-    };
-  });
+  }
+  return weapons;
+}
 
 export const mapDetailQueryOptions = (map: string) =>
   queryOptions({

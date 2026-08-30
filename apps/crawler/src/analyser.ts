@@ -104,6 +104,14 @@ async function recomputeBotness(): Promise<void> {
         case
           when ca.hack = 1 or ca.rate_hard = 1
             or ca.total_secs > 30000 * 3600 or ca.max_class_secs > 30000 * 3600
+            -- class-hours vs Steam-hours impossibility: class playtime only
+            -- accrues while the game is running, so summed class stats can't
+            -- exceed Steam's wall-clock playtime — unless the stats were
+            -- inflated (idle/achievement-server plugins). Slack of 1.5x+2000h
+            -- covers pre-2009 accounts whose class stats predate Steam hours
+            -- tracking, and lifetime_min > 0 skips hidden-playtime profiles.
+            or (ca.lifetime_min > 0
+              and ca.total_secs > ca.lifetime_min * 60 * 1.5 + 2000 * 3600)
           then 1.0
           else 1 - (
             (1 - 0.9 * coalesce(ca.s_rate, 0))
@@ -128,6 +136,26 @@ async function recomputeBotness(): Promise<void> {
       left join stock_agg sa on sa.steamid = ca.steamid
     ) sub
     where p.steamid = sub.steamid
+  `);
+
+  // (7) zero-gameplay idlers — the trade-bot signature the pass above can't
+  // see. The class_agg scorer only scores players WITH class stats, so a
+  // 24/7 trading bot (50k lifetime hours, stats readable but EMPTY, botness
+  // NULL = included) sailed straight onto the hours leaderboard; the top ~25
+  // hours entries were all "Witch's Bot 25/8"-style traders. If we could READ
+  // their stats (status ok/empty — NOT private, which proves nothing) and no
+  // class shows a single second of playtime, then 100h+ of tf2_minutes is
+  // pure idling: playing even one match uploads class stats. Runs AFTER the
+  // main update so all-zero-playtime rows (which class_agg scores ~0) are
+  // overwritten with the hard flag.
+  await db.execute(sql`
+    update players p set botness = 1.0
+    where coalesce(p.tf2_minutes, 0) >= 6000
+      and p.stats_status in ('ok', 'empty')
+      and not exists (
+        select 1 from player_class_stats c
+        where c.steamid = p.steamid and c.playtime_seconds > 0
+      )
   `);
 }
 
